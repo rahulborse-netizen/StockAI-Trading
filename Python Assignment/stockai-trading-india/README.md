@@ -63,6 +63,17 @@ The project is organized into several directories and files, each serving a spec
      - `predictions.csv` (test-set probabilities)
      - `equity_curve.csv` and `stats.json` (backtest results)
 
+   - Batch run across a universe (edit `configs/universe_nifty50.txt`):
+     ```
+     python -m src.cli batch --start 2020-01-01 --end 2025-01-01 --outdir outputs/nifty_batch
+     ```
+     This writes `summary.csv` with per-ticker metrics.
+
+   - Paper trading simulation (no broker; produces a trade blotter):
+     ```
+     python -m src.cli paper --ticker RELIANCE.NS --start 2020-01-01 --end 2025-01-01 --outdir outputs/paper_reliance
+     ```
+
 5. Run the (placeholder) real-time app:
    ```
    python src/main.py
@@ -71,6 +82,12 @@ The project is organized into several directories and files, each serving a spec
 ## Safety / Disclaimer
 This project is for **educational and research** purposes. Markets are risky; backtests can be misleading due to
 overfitting, survivorship bias, and changing regimes. Use **paper trading** and strong risk controls before any live use.
+
+## Zerodha (optional, later)
+Live trading is intentionally **not enabled by default**. If you want to integrate Zerodha later:
+- Get API key/secret from Zerodha developer portal
+- Generate an `access_token` via the official login flow
+- Provide credentials via environment variables / `.env` (never commit secrets)
 
 ## Usage
 - Modify the strategies in the `src/strategies/` directory to implement your trading logic.

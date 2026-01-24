@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import time
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,8 @@ def download_yahoo_ohlcv(
     interval: str = "1d",
     cache_path: Optional[Path] = None,
     refresh: bool = False,
+    retries: int = 3,
+    retry_sleep_s: float = 1.0,
 ) -> OHLCV:
     """
     Download OHLCV data via Yahoo Finance.
@@ -85,23 +88,33 @@ def download_yahoo_ohlcv(
 
     import yfinance as yf
 
-    try:
-        df = yf.download(
-            tickers=ticker,
-            start=start,
-            end=end,
-            interval=interval,
-            auto_adjust=False,
-            progress=False,
-            threads=True,
-        )
-    except Exception as e:  # noqa: BLE001
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            df = yf.download(
+                tickers=ticker,
+                start=start,
+                end=end,
+                interval=interval,
+                auto_adjust=False,
+                progress=False,
+                threads=False,  # more stable on some networks
+                group_by="column",
+            )
+            if df is not None and not df.empty:
+                break
+            last_err = ValueError("No data returned (empty dataframe).")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        if attempt < retries:
+            time.sleep(retry_sleep_s)
+    else:
         raise RuntimeError(
-            "Failed to download Yahoo Finance data. "
+            "Failed to download Yahoo Finance data after retries. "
             "If you're on a corporate network/proxy, this can be an SSL certificate issue. "
             "Try upgrading certifi (`python -m pip install --upgrade certifi`) or configuring "
             "`SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` to your organization's root CA."
-        ) from e
+        ) from last_err
 
     df = _standardize_ohlcv(df)
     ohlcv = OHLCV(df=df)

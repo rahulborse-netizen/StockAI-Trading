@@ -49,14 +49,21 @@ def make_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def add_label_next_day_up(df_with_features: pd.DataFrame, threshold: float = 0.0) -> pd.DataFrame:
+def add_label_forward_return_up(df_with_features: pd.DataFrame, days: int = 1, threshold: float = 0.0) -> pd.DataFrame:
     """
-    Binary label: 1 if next day's return > threshold, else 0.
+    Binary label: 1 if forward return over `days` bars > threshold, else 0.
     """
+    if days < 1:
+        raise ValueError("days must be >= 1")
     out = df_with_features.copy()
-    out["fwd_ret_1"] = out["close"].pct_change(1).shift(-1)
-    out["label_up"] = (out["fwd_ret_1"] > threshold).astype(int)
+    out[f"fwd_ret_{days}"] = out["close"].pct_change(days).shift(-days)
+    out["label_up"] = (out[f"fwd_ret_{days}"] > threshold).astype(int)
     return out
+
+
+def add_label_next_day_up(df_with_features: pd.DataFrame, threshold: float = 0.0) -> pd.DataFrame:
+    # Backwards-compatible wrapper
+    return add_label_forward_return_up(df_with_features, days=1, threshold=threshold)
 
 
 def clean_ml_frame(df: pd.DataFrame, feature_cols: list[str], label_col: str) -> pd.DataFrame:
