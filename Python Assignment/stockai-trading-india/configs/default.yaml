@@ -1,0 +1,30 @@
+api_key: "YOUR_API_KEY"
+api_secret: "YOUR_API_SECRET"
+broker: "Zerodha"
+trading_pair: "NSE:RELIANCE"
+timeframe: "5m"
+max_trade_size: 1000
+risk_management:
+  stop_loss: 0.02
+  take_profit: 0.05
+data_sources:
+  - name: "NSE"
+    type: "api"
+    endpoint: "https://api.nseindia.com/api/option-chain-indices"
+    params:
+      instrument: "OPTIDX"
+      expiryDate: "2023-12-28"
+      strikePrice: "2000"
+      optionType: "CE"
+      quantity: 1
+logging:
+  level: "INFO"
+  file: "logs/trading.log"
+  max_size: "10MB"
+  backup_count: 5
+model:
+  type: "RandomForest"
+  parameters:
+    n_estimators: 100
+    max_depth: 10
+    random_state: 42

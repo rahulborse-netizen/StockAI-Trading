@@ -1,0 +1,14 @@
+numpy
+pandas
+scikit-learn
+matplotlib
+seaborn
+requests
+flask
+python-dotenv
+kiteconnect
+backtrader
+jupyter
+pytest
+yfinance
+joblib
