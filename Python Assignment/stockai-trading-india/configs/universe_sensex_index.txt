@@ -1,0 +1,6 @@
+# Sensex Index and ETF tickers for Yahoo Finance
+# Index: ^BSESN or BSESN.BO
+# ETF: SENSEX.NS (if available) or use index directly
+
+^BSESN
+BSESN.BO

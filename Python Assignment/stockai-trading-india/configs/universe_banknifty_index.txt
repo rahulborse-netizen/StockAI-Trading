@@ -1,0 +1,6 @@
+# BankNifty Index and ETF tickers for Yahoo Finance
+# Index: ^NSEBANK or NSEBANK.NS
+# ETF: BANKBEES.NS (most liquid BankNifty ETF)
+
+^NSEBANK
+BANKBEES.NS

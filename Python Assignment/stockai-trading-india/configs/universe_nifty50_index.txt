@@ -1,0 +1,6 @@
+# NIFTY50 Index and ETF tickers for Yahoo Finance
+# Index: ^NSEI or NSEI.NS
+# ETF: NIFTYBEES.NS (most liquid NIFTY50 ETF)
+
+^NSEI
+NIFTYBEES.NS
