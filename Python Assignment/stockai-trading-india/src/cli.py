@@ -333,6 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--fee-bps", type=float, default=10.0, help="Transaction fee per position change (bps)")
     b.add_argument("--min-train-size", type=int, default=252, help="Min rows before walk-forward starts (portfolio mode)")
     b.add_argument("--retrain-every", type=int, default=20, help="Retrain frequency (rows) for walk-forward (portfolio mode)")
+    b.add_argument("--compare-index", default=None, help="Compare strategy returns vs index benchmark (e.g., ^NSEI, NIFTYBEES.NS)")
     b.set_defaults(func=cmd_batch)
 
     ppr = sub.add_parser("paper", help="Run a paper-trading simulation (no broker).")
