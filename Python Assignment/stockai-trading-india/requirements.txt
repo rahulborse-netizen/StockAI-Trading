@@ -5,6 +5,7 @@ matplotlib
 seaborn
 requests
 flask
+flask-cors
 python-dotenv
 kiteconnect
 backtrader
