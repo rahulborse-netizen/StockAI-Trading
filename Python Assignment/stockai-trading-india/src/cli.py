@@ -7,11 +7,12 @@ from pathlib import Path
 import pandas as pd
 
 from src.research.backtest import backtest_long_cash_from_prob
-from src.research.batch import run_batch_research
+from src.research.batch import run_batch_research, run_portfolio_backtest
 from src.research.data import download_yahoo_ohlcv
 from src.research.features import add_label_forward_return_up, clean_ml_frame, make_features
 from src.research.ml import save_model, train_baseline_classifier, walk_forward_predict_proba
 from src.research.universe import load_universe_file
+from src.research.visualize import generate_backtest_report
 from src.paper.paper_trader import paper_trade_long_cash
 
 
@@ -95,6 +96,18 @@ def cmd_research(args: argparse.Namespace) -> int:
     stats_path = outdir / "stats.json"
     stats_path.write_text(json.dumps(bt.stats, indent=2))
 
+    # Auto-generate visualization report
+    try:
+        report_path = generate_backtest_report(
+            result=bt,
+            outdir=outdir,
+            ticker=args.ticker,
+            include_plots=True,
+        )
+        print(f"- HTML Report: {report_path}")
+    except Exception as e:
+        print(f"Warning: Failed to generate visualization report: {e}")
+
     print("Research run complete")
     print(f"- Data cache: {cache}")
     if model_path:
@@ -110,25 +123,57 @@ def cmd_research(args: argparse.Namespace) -> int:
 
 def cmd_batch(args: argparse.Namespace) -> int:
     uni = load_universe_file(args.universe)
-    res = run_batch_research(
-        tickers=uni.tickers,
-        start=args.start,
-        end=args.end,
-        interval=args.interval,
-        outdir=args.outdir,
-        refresh=args.refresh,
-        test_size=args.test_size,
-        random_state=args.random_state,
-        label_days=args.label_days,
-        label_threshold=args.label_threshold,
-        prob_threshold=args.prob_threshold,
-        fee_bps=args.fee_bps,
-    )
+    
+    if args.portfolio_mode:
+        # Portfolio backtest mode
+        res = run_portfolio_backtest(
+            tickers=uni.tickers,
+            start=args.start,
+            end=args.end,
+            interval=args.interval,
+            outdir=args.outdir,
+            refresh=args.refresh,
+            random_state=args.random_state,
+            label_days=args.label_days,
+            label_threshold=args.label_threshold,
+            prob_threshold=args.prob_threshold,
+            fee_bps=args.fee_bps,
+            position_sizing=args.position_sizing,
+            min_train_size=getattr(args, "min_train_size", 252),
+            retrain_every=getattr(args, "retrain_every", 20),
+        )
+        
+        print("Portfolio backtest complete")
+        print(f"- Universe: {uni.name} ({len(uni.tickers)} tickers)")
+        print(f"- Portfolio equity curve: {args.outdir}/portfolio_equity_curve.csv")
+        print(f"- Position weights: {args.outdir}/portfolio_position_weights.csv")
+        print(f"- Portfolio stats: {args.outdir}/portfolio_stats.json")
+        print(json.dumps(res.stats, indent=2))
+    else:
+        # Individual backtest mode (original behavior)
+        res = run_batch_research(
+            tickers=uni.tickers,
+            start=args.start,
+            end=args.end,
+            interval=args.interval,
+            outdir=args.outdir,
+            refresh=args.refresh,
+            test_size=args.test_size,
+            random_state=args.random_state,
+            label_days=args.label_days,
+            label_threshold=args.label_threshold,
+            prob_threshold=args.prob_threshold,
+            fee_bps=args.fee_bps,
+            compare_index=getattr(args, "compare_index", None),
+        )
 
-    print("Batch run complete")
-    print(f"- Universe: {uni.name} ({len(uni.tickers)} tickers)")
-    print(f"- Output dir: {res.outdir}")
-    print(f"- Summary: {res.outdir / 'summary.csv'}")
+        print("Batch run complete")
+        print(f"- Universe: {uni.name} ({len(uni.tickers)} tickers)")
+        print(f"- Output dir: {res.outdir}")
+        print(f"- Summary: {res.outdir / 'summary.csv'}")
+        # Note: Individual reports are generated in each ticker's subdirectory
+        print(f"- Individual reports: Check subdirectories in {res.outdir}")
+    
     return 0
 
 
@@ -178,6 +223,69 @@ def cmd_paper(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_visualize(args: argparse.Namespace) -> int:
+    """Generate visualization report from existing backtest results."""
+    outdir = Path(args.outdir)
+    
+    if not outdir.exists():
+        print(f"Error: Output directory does not exist: {outdir}")
+        return 1
+    
+    # Try to load backtest results
+    equity_path = outdir / "equity_curve.csv"
+    benchmark_path = outdir / "benchmark_equity_curve.csv"
+    stats_path = outdir / "stats.json"
+    
+    if not equity_path.exists():
+        print(f"Error: equity_curve.csv not found in {outdir}")
+        print("This command requires existing backtest results.")
+        return 1
+    
+    try:
+        # Load equity curves
+        equity_df = pd.read_csv(equity_path, parse_dates=True, index_col=0)
+        equity_curve = equity_df["equity"]
+        
+        benchmark_equity = None
+        if benchmark_path.exists():
+            bench_df = pd.read_csv(benchmark_path, parse_dates=True, index_col=0)
+            benchmark_equity = bench_df["equity"]
+        
+        # Load stats
+        stats = {}
+        if stats_path.exists():
+            stats = json.loads(stats_path.read_text())
+        
+        # Create BacktestResult-like object
+        from src.research.backtest import BacktestResult
+        daily_returns = equity_curve.pct_change(1)
+        
+        result = BacktestResult(
+            equity_curve=equity_curve,
+            benchmark_equity=benchmark_equity if benchmark_equity is not None else equity_curve,
+            daily_returns=daily_returns,
+            stats=stats,
+        )
+        
+        # Generate report
+        report_path = generate_backtest_report(
+            result=result,
+            outdir=outdir,
+            ticker=args.ticker,
+            include_plots=True,
+        )
+        
+        print("Visualization report generated successfully")
+        print(f"- Report: {report_path}")
+        return 0
+        
+    except Exception as e:
+        print(f"Error generating visualization report: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="stockai",
@@ -215,12 +323,17 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--interval", default="1d", help="Data interval (default: 1d)")
     b.add_argument("--refresh", action="store_true", help="Re-download data even if cache exists")
     b.add_argument("--outdir", default="outputs/batch", help="Output directory")
-    b.add_argument("--test-size", type=float, default=0.2, help="Fraction of data used as test (time-based)")
+    b.add_argument("--portfolio-mode", action="store_true", help="Run portfolio backtest (multiple positions simultaneously) instead of individual backtests")
+    b.add_argument("--position-sizing", choices=["equal_weight", "custom"], default="equal_weight", help="Position sizing method for portfolio mode")
+    b.add_argument("--test-size", type=float, default=0.2, help="Fraction of data used as test (time-based, ignored in portfolio mode)")
     b.add_argument("--random-state", type=int, default=42, help="Random seed")
     b.add_argument("--label-days", type=int, default=1, help="Label horizon in trading days (default: 1)")
     b.add_argument("--label-threshold", type=float, default=0.0, help="Label threshold for next-day return")
     b.add_argument("--prob-threshold", type=float, default=0.55, help="Prob threshold to go long")
     b.add_argument("--fee-bps", type=float, default=10.0, help="Transaction fee per position change (bps)")
+    b.add_argument("--min-train-size", type=int, default=252, help="Min rows before walk-forward starts (portfolio mode)")
+    b.add_argument("--retrain-every", type=int, default=20, help="Retrain frequency (rows) for walk-forward (portfolio mode)")
+    b.add_argument("--compare-index", default=None, help="Compare strategy returns vs index benchmark (e.g., ^NSEI, NIFTYBEES.NS)")
     b.set_defaults(func=cmd_batch)
 
     ppr = sub.add_parser("paper", help="Run a paper-trading simulation (no broker).")
@@ -243,6 +356,11 @@ def build_parser() -> argparse.ArgumentParser:
     ppr.add_argument("--min-train-size", type=int, default=252, help="Min rows before walk-forward starts")
     ppr.add_argument("--retrain-every", type=int, default=20, help="Retrain frequency (rows) for walk-forward")
     ppr.set_defaults(func=cmd_paper)
+
+    viz = sub.add_parser("visualize", help="Generate visualization report from existing backtest results.")
+    viz.add_argument("--outdir", required=True, help="Output directory containing backtest results")
+    viz.add_argument("--ticker", default="Strategy", help="Ticker/strategy name for report title")
+    viz.set_defaults(func=cmd_visualize)
 
     return p
 
