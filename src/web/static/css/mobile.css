@@ -1,0 +1,153 @@
+/* Additional Mobile-Specific Styles */
+
+/* Prevent text size adjustment on iOS */
+html {
+    -webkit-text-size-adjust: 100%;
+    -moz-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+/* Mobile hide/show utilities */
+.mobile-hide {
+    display: inline;
+}
+
+@media (max-width: 768px) {
+    .mobile-hide {
+        display: none !important;
+    }
+}
+
+/* Smooth scrolling on mobile */
+@media (max-width: 768px) {
+    * {
+        -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+    }
+    
+    body {
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    /* Better table scrolling */
+    .table-container {
+        -webkit-overflow-scrolling: touch;
+        position: relative;
+    }
+    
+    .table-container::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 20px;
+        background: linear-gradient(to right, transparent, var(--bg-card));
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+    
+    .table-container.scrolling::after {
+        opacity: 1;
+    }
+    
+    /* Swipe gestures hint */
+    .table-container::before {
+        content: '← Swipe to see more →';
+        position: absolute;
+        bottom: -30px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        white-space: nowrap;
+        z-index: 1;
+    }
+}
+
+/* Mobile-specific button styles */
+@media (max-width: 768px) {
+    .btn-modern {
+        padding: 0.75rem 1rem;
+        font-size: 0.875rem;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .btn-modern.btn-sm {
+        padding: 0.625rem 0.875rem;
+        font-size: 0.8125rem;
+        min-height: 40px;
+    }
+    
+    /* Better form inputs on mobile */
+    .input-modern {
+        padding: 0.875rem 1rem;
+        font-size: 16px; /* Prevents zoom on iOS */
+        min-height: 44px;
+    }
+    
+    select.input-modern {
+        padding: 0.875rem 1rem;
+        font-size: 16px;
+        min-height: 44px;
+    }
+    
+    /* Modal improvements */
+    .modal-dialog {
+        margin: 0;
+        max-height: 100vh;
+        display: flex;
+        align-items: center;
+    }
+    
+    .modal-content-modern {
+        max-height: 90vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    /* Better spacing */
+    .form-group-modern {
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-label-modern {
+        font-size: 0.875rem;
+        margin-bottom: 0.75rem;
+    }
+}
+
+/* Portrait orientation optimizations */
+@media (max-width: 768px) and (orientation: portrait) {
+    .indices-bar {
+        padding: 0.5rem;
+    }
+    
+    .main-layout {
+        margin-top: 0.5rem;
+    }
+    
+    .holdings-header {
+        margin-bottom: 1rem;
+    }
+}
+
+/* Safe area for notched devices */
+@supports (padding: max(0px)) {
+    @media (max-width: 768px) {
+        .navbar-modern {
+            padding-left: max(1rem, env(safe-area-inset-left));
+            padding-right: max(1rem, env(safe-area-inset-right));
+        }
+        
+        .dashboard-container {
+            padding-left: max(0.5rem, env(safe-area-inset-left));
+            padding-right: max(0.5rem, env(safe-area-inset-right));
+            padding-bottom: max(1rem, env(safe-area-inset-bottom));
+        }
+    }
+}

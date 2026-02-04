@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>AI Trading Platform | Professional Trading Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Chart.js for live trading charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <!-- Phase 1.1: Clean consolidated CSS -->
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+    <!-- Keep trading-platform.css for layout, but app.css takes precedence -->
+    <link href="{{ url_for('static', filename='css/trading-platform.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/signals.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/trade-plans.css') }}" rel="stylesheet">
+</head>
+<body class="dashboard-body">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar-modern">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <div class="brand-icon">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <div class="brand-text">
+                    <h1>AI Trading</h1>
+                    <span>Smart Trading Platform</span>
+                </div>
+            </div>
+            <div class="nav-actions">
+                <button class="btn-modern btn-icon mobile-menu-btn" onclick="toggleMobileSidebar()" title="Menu" id="mobile-menu-btn" style="display: none;">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <button class="btn-modern btn-icon" onclick="showUpstoxModal()" title="Connect Upstox">
+                    <i class="fas fa-plug"></i>
+                    <span class="mobile-hide">Connect</span>
+                </button>
+                <div class="connection-status" id="connection-status">
+                    <i class="fas fa-circle"></i>
+                    <span class="mobile-hide">Disconnected</span>
+                </div>
+                <button class="btn-modern btn-icon" onclick="toggleTheme()" title="Toggle Theme">
+                    <i class="fas fa-moon" id="theme-icon"></i>
+                </button>
+            </div>
+            <!-- Upstox-style Navigation Tabs -->
+            <div class="nav-tabs-container">
+                <button class="nav-tab" onclick="switchTab('watchlist')" data-tab="watchlist">
+                    <span>My List</span>
+                </button>
+                <button class="nav-tab" onclick="switchTab('orders')" data-tab="orders">
+                    <span>Orders</span>
+                </button>
+                <button class="nav-tab" onclick="switchTab('positions')" data-tab="positions">
+                    <span>Positions</span>
+                </button>
+                <button class="nav-tab active" onclick="switchTab('holdings')" data-tab="holdings">
+                    <span>Holdings</span>
+                </button>
+                <button class="nav-tab" onclick="switchTab('signals')" data-tab="signals">
+                    <span>More</span>
+                    <i class="fas fa-chevron-down"></i>
+                </button>
+            </div>
+            
+            <!-- Paper Trading Mode Toggle -->
+            <div class="paper-trading-toggle-container">
+                <div class="paper-trading-toggle">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="paper-trading-toggle" onchange="togglePaperTrading()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label" id="paper-trading-label">
+                        <i class="fas fa-flask"></i> Paper Trading: <strong>OFF</strong>
+                    </span>
+                </div>
+                <div class="paper-trading-info" id="paper-trading-info" style="display: none;">
+                    <span class="badge bg-info">Simulation Mode Active - No real money will be used</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Market Indices Bar -->
+    <div class="indices-bar">
+        <div class="indices-container">
+            <div class="index-item" id="index-nifty">
+                <div class="index-label">NIFTY</div>
+                <div class="index-value">--</div>
+                <div class="index-change">--</div>
+            </div>
+            <div class="index-item" id="index-sensex">
+                <div class="index-label">SENSEX</div>
+                <div class="index-value">--</div>
+                <div class="index-change">--</div>
+            </div>
+            <div class="index-item" id="index-banknifty">
+                <div class="index-label">BANKNIFTY</div>
+                <div class="index-value">--</div>
+                <div class="index-change">--</div>
+            </div>
+            <div class="index-item" id="index-vix">
+                <div class="index-label">INDIA VIX</div>
+                <div class="index-value">--</div>
+                <div class="index-change">--</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Dashboard Container -->
+    <div class="dashboard-container">
+        <!-- Main Content Area -->
+        <div class="main-layout">
+            <!-- Left Sidebar -->
+            <div class="sidebar" id="mobile-sidebar">
+                <div class="sidebar-section">
+                    <div class="sidebar-header">
+                        <h5>Top Stocks</h5>
+                        <span class="badge bg-secondary" id="top-stocks-count">0</span>
+                        <button class="btn-close-modern mobile-close-btn" onclick="toggleMobileSidebar()" style="display: none;">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="sidebar-search">
+                        <input type="text" class="input-modern input-sm" id="stock-search" placeholder="Search stocks...">
+                    </div>
+                    <div class="stock-list" id="stock-list-container">
+                        <!-- Stock list will be loaded here -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Mobile Sidebar Overlay - Disabled for laptop focus -->
+            <div class="mobile-overlay" id="mobile-overlay" onclick="toggleMobileSidebar()" style="display: none !important; pointer-events: none !important; z-index: -1 !important;"></div>
+
+            <!-- Main Content -->
+            <div class="main-content">
+                <!-- Tabs Navigation -->
+                <div class="tabs-nav">
+                    <button class="tab-btn active" onclick="switchTab('holdings')" data-tab="holdings">
+                        <i class="fas fa-wallet"></i> Holdings
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('watchlist')" data-tab="watchlist">
+                        <i class="fas fa-star"></i> Watchlist
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('positions')" data-tab="positions">
+                        <i class="fas fa-chart-line"></i> Positions
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('orders')" data-tab="orders">
+                        <i class="fas fa-shopping-cart"></i> Orders
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('signals')" data-tab="signals">
+                        <i class="fas fa-crosshairs"></i> Trading Signals
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('trade-plans')" data-tab="trade-plans" id="trade-plans-tab">
+                        <i class="fas fa-clipboard-list"></i> Trade Plans
+                    </button>
+                </div>
+
+                <!-- Holdings Tab -->
+                <div class="tab-content active" id="tab-holdings">
+                    <div class="holdings-header">
+                        <div class="holdings-summary">
+                            <div class="summary-item">
+                                <span class="summary-label">Invested</span>
+                                <span class="summary-value" id="total-invested">₹0.00</span>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">Current</span>
+                                <span class="summary-value" id="total-current">₹0.00</span>
+                            </div>
+                            <div class="summary-item profit">
+                                <span class="summary-label">Overall P&L</span>
+                                <span class="summary-value" id="overall-pnl">₹0.00 (0.00%)</span>
+                            </div>
+                            <div class="summary-item profit">
+                                <span class="summary-label">Day P&L</span>
+                                <span class="summary-value" id="day-pnl">₹0.00 (0.00%)</span>
+                            </div>
+                        </div>
+                        <div class="holdings-actions">
+                            <button class="btn-modern btn-primary" onclick="refreshHoldings()">
+                                <i class="fas fa-sync-alt"></i> Refresh
+                            </button>
+                            <button class="btn-modern btn-primary" onclick="showAddStockModal()">
+                                <i class="fas fa-plus"></i> Add Stock
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="holdings-tabs">
+                        <button class="holdings-tab active" onclick="filterHoldings('all')">All (<span id="count-all">0</span>)</button>
+                        <button class="holdings-tab" onclick="filterHoldings('demat')">Demat (<span id="count-demat">0</span>)</button>
+                        <button class="holdings-tab" onclick="filterHoldings('watchlist')">Watchlist (<span id="count-watchlist">0</span>)</button>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="stocks-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Net Qty</th>
+                                    <th>Avg. Price</th>
+                                    <th>LTP</th>
+                                    <th>Current Value</th>
+                                    <th>Day P&L</th>
+                                    <th>Day %</th>
+                                    <th>Overall P&L</th>
+                                    <th>Overall %</th>
+                                    <th>Chart</th>
+                                    <th>Signal</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="holdings-table-body">
+                                <!-- Holdings data will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Watchlist Tab -->
+                <div class="tab-content" id="tab-watchlist">
+                    <div class="watchlist-header">
+                        <h3><i class="fas fa-star"></i> Watchlist</h3>
+                        <div class="input-group-modern">
+                            <input type="text" class="input-modern" id="new-ticker" placeholder="Add ticker (e.g., RELIANCE.NS)">
+                            <button class="btn-modern btn-primary" onclick="addToWatchlist()">
+                                <i class="fas fa-plus"></i> Add
+                            </button>
+                        </div>
+                    </div>
+                    <div class="watchlist-grid-modern" id="watchlist-container">
+                        <!-- Watchlist items will be loaded here -->
+                    </div>
+                </div>
+
+                <!-- Positions Tab -->
+                <div class="tab-content" id="tab-positions">
+                    <div class="positions-header">
+                        <h3><i class="fas fa-chart-line"></i> Positions</h3>
+                        <div class="position-filters">
+                            <button class="filter-btn active" onclick="filterPositions('all')" data-filter="all">All</button>
+                            <button class="filter-btn" onclick="filterPositions('today')" data-filter="today">Today</button>
+                            <button class="filter-btn" onclick="filterPositions('intraday')" data-filter="intraday">Intraday</button>
+                            <button class="filter-btn" onclick="filterPositions('historical')" data-filter="historical">Historical</button>
+                            <button class="btn-action btn-sm" onclick="syncDailyPositions()" title="Sync from Upstox">
+                                <i class="fas fa-sync"></i> Sync
+                            </button>
+                        </div>
+                    </div>
+                    <div id="daily-position-stats" class="daily-stats-bar" style="display: none;">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Trades:</span>
+                            <span class="stat-value" id="stat-total-trades">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Win Rate:</span>
+                            <span class="stat-value" id="stat-win-rate">0%</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Intraday P&L:</span>
+                            <span class="stat-value" id="stat-intraday-pnl">₹0.00</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Unrealized P&L:</span>
+                            <span class="stat-value" id="stat-unrealized-pnl">₹0.00</span>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table class="stocks-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Qty</th>
+                                    <th>Entry Price</th>
+                                    <th>Exit Price</th>
+                                    <th>Entry Time</th>
+                                    <th>Exit Time</th>
+                                    <th>P&L</th>
+                                    <th>P&L %</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="positions-table-body">
+                                <tr>
+                                    <td colspan="10" class="text-center text-muted">No positions found</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Orders Tab -->
+                <div class="tab-content" id="tab-orders">
+                    <div class="orders-header">
+                        <h3><i class="fas fa-shopping-cart"></i> Orders</h3>
+                        <button class="btn-modern btn-primary" onclick="showPlaceOrderModal()">
+                            <i class="fas fa-plus"></i> Place Order
+                        </button>
+                    </div>
+                    <div class="table-container">
+                        <table class="stocks-table">
+                            <thead>
+                                <tr>
+                                    <th>Order ID</th>
+                                    <th>Symbol</th>
+                                    <th>Type</th>
+                                    <th>Qty</th>
+                                    <th>Price</th>
+                                    <th>Status</th>
+                                    <th>Time</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="orders-table-body">
+                                <tr>
+                                    <td colspan="8" class="text-center text-muted">Connect Upstox to view orders</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Trading Signals Tab -->
+                <div class="tab-content" id="tab-signals">
+                    <div class="signals-header">
+                        <h3><i class="fas fa-crosshairs"></i> Trading Signals & Entry/Exit Levels</h3>
+                        <div class="signals-actions">
+                            <button class="btn-modern btn-primary" onclick="loadAllSignals()">
+                                <i class="fas fa-sync-alt"></i> Refresh All Signals
+                            </button>
+                            <button class="btn-modern btn-secondary" onclick="showIndexSignals()">
+                                <i class="fas fa-chart-bar"></i> Index Signals
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Index Signals Section -->
+                    <div id="index-signals-section" style="display: none;">
+                        <h4 style="margin: 1rem 0;">Index Trading Signals</h4>
+                        <div class="index-signals-grid" id="index-signals-grid">
+                            <!-- Index signals will be loaded here -->
+                        </div>
+                    </div>
+                    
+                    <!-- Stock Signals Section -->
+                    <div class="signals-container" id="signals-container">
+                        <div class="empty-state">
+                            <i class="fas fa-mouse-pointer"></i>
+                            <p>Select a stock from holdings or watchlist to view trading signals and charts</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trade Plans Tab -->
+                <div class="tab-content" id="tab-trade-plans">
+                    <div class="trade-plans-header">
+                        <h3><i class="fas fa-clipboard-list"></i> Trade Plans</h3>
+                        <div class="trade-plans-actions">
+                            <div class="filters-row mb-3">
+                                <select class="form-select form-select-sm me-2" id="trade-plan-status-filter" onchange="filterTradePlans()" style="max-width: 150px;">
+                                    <option value="">All Status</option>
+                                    <option value="draft">Draft</option>
+                                    <option value="approved">Approved</option>
+                                    <option value="executed">Executed</option>
+                                    <option value="cancelled">Cancelled</option>
+                                </select>
+                                <select class="form-select form-select-sm me-2" id="trade-plan-type-filter" onchange="filterTradePlans()" style="max-width: 150px;">
+                                    <option value="">All Types</option>
+                                    <option value="intraday">Intraday</option>
+                                    <option value="swing">Swing</option>
+                                    <option value="position">Position</option>
+                                </select>
+                                <input type="text" class="form-control form-control-sm me-2" id="trade-plan-symbol-filter" 
+                                       placeholder="Filter by symbol..." onchange="filterTradePlans()" style="max-width: 150px;">
+                                <button class="btn-modern btn-primary btn-sm" onclick="loadTradePlans()">
+                                    <i class="fas fa-sync"></i> Refresh
+                                </button>
+                            </div>
+                            <div class="generate-plan-section">
+                                <input type="text" class="form-control form-control-sm me-2" id="generate-plan-ticker" 
+                                       placeholder="Enter ticker (e.g., RELIANCE.NS)" style="max-width: 200px;">
+                                <select class="form-select form-select-sm me-2" id="generate-plan-type" style="max-width: 120px;">
+                                    <option value="swing">Swing</option>
+                                    <option value="intraday">Intraday</option>
+                                    <option value="position">Position</option>
+                                </select>
+                                <button class="btn-modern btn-success btn-sm" onclick="generateTradePlanFromInput()">
+                                    <i class="fas fa-plus"></i> Generate Plan
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="trade-plans-container" id="trade-plans-container">
+                        <div class="text-center text-muted p-4">
+                            <i class="fas fa-spinner fa-spin"></i> Loading trade plans...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals (same as before) -->
+    <!-- Upstox Connection Modal -->
+    <div class="modal fade" id="upstoxModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-plug modal-icon"></i>
+                        <h5>Connect Upstox API</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <form id="upstox-form">
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-key"></i> API Key
+                            </label>
+                            <input type="text" class="input-modern" id="api-key" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-lock"></i> API Secret
+                            </label>
+                            <input type="password" class="input-modern" id="api-secret" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-link"></i> Redirect URI
+                            </label>
+                            <input type="text" class="input-modern" id="redirect-uri" placeholder="Auto-detected on connect" 
+                                   title="This MUST match exactly in Upstox Developer Portal">
+                            <small class="text-muted" style="display: block; margin-top: 0.5rem; font-size: 0.75rem;">
+                                ⚠️ <strong>CRITICAL:</strong> Leave empty to auto-detect, but make sure the detected URI is added in 
+                                <a href="https://account.upstox.com/developer/apps" target="_blank" style="color: #6366f1;">Upstox Developer Portal</a>
+                            </small>
+                            <div class="info-box" style="margin-top: 0.5rem; padding: 0.75rem; background: #fef3c7; border-left: 3px solid #f59e0b;">
+                                <strong style="color: #92400e;">💡 Tip:</strong> 
+                                <span style="color: #78350f; font-size: 0.875rem;">
+                                    If you get "UDAPI100068" error, the redirect URI doesn't match. Copy the exact URI shown here and add it in Upstox Portal.
+                                </span>
+                            </div>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-key"></i> Access Token (Optional)
+                            </label>
+                            <input type="password" class="input-modern" id="access-token" placeholder="Paste access token if available">
+                        </div>
+                        <div class="info-box">
+                            <i class="fas fa-info-circle"></i>
+                            <div>
+                                <strong>Setup Instructions:</strong>
+                                <ol style="margin: 0.5rem 0 0 1.5rem; font-size: 0.875rem;">
+                                    <li>Get API credentials from <a href="https://account.upstox.com/developer/apps" target="_blank">Upstox Developer Portal</a></li>
+                                    <li>Create an app and note your API Key and Secret</li>
+                                    <li><strong>CRITICAL:</strong> Add Redirect URI(s) in Upstox Portal:
+                                        <ul style="margin-top: 0.25rem;">
+                                            <li><code>http://localhost:5000/callback</code> (for same computer)</li>
+                                            <li><code>http://192.168.1.4:5000/callback</code> (for network access - check your IP)</li>
+                                        </ul>
+                                        <strong style="color: #ef4444;">⚠️ Must match EXACTLY (no trailing slash, exact IP/port)</strong>
+                                    </li>
+                                    <li>Enter API Key and Secret here</li>
+                                    <li>Click Connect - it will show the redirect URI being used</li>
+                                    <li>Verify that redirect URI is in Upstox Portal before authorizing</li>
+                                    <li>Authorize the app in the popup window</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <!-- No-popup auth fallback (corporate browsers often block popups) -->
+                        <div class="info-box" id="upstox-auth-box" style="display:none; margin-top: 1rem;">
+                            <i class="fas fa-external-link-alt"></i>
+                            <div style="width:100%;">
+                                <strong>Authorization link</strong>
+                                <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                                    <input type="text" class="input-modern" id="upstox-auth-url" readonly style="flex:1; min-width: 240px;">
+                                    <button type="button" class="btn-modern btn-secondary btn-sm" onclick="copyUpstoxAuthUrl()">
+                                        Copy
+                                    </button>
+                                    <button type="button" class="btn-modern btn-primary btn-sm" onclick="openUpstoxAuthUrl()">
+                                        Open
+                                    </button>
+                                </div>
+                                <div style="margin-top:0.5rem; font-size:0.75rem; color: var(--text-muted);">
+                                    If the popup is blocked, click <strong>Open</strong> (opens in a new tab).
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer-modern">
+                    <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal" id="upstox-cancel-btn">Cancel</button>
+                    <button type="button" class="btn-modern btn-primary" onclick="connectUpstox()" id="upstox-connect-btn">
+                        <i class="fas fa-plug"></i> Connect
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Stock Modal -->
+    <div class="modal fade" id="addStockModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-plus modal-icon"></i>
+                        <h5>Add Stock to Holdings</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <form id="add-stock-form">
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-tag"></i> Ticker Symbol
+                            </label>
+                            <input type="text" class="input-modern" id="stock-ticker" placeholder="e.g., RELIANCE.NS" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-sort-numeric-up"></i> Quantity
+                            </label>
+                            <input type="number" class="input-modern" id="stock-quantity" min="1" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-rupee-sign"></i> Average Price
+                            </label>
+                            <input type="number" class="input-modern" id="stock-avg-price" step="0.01" required>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer-modern">
+                    <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-modern btn-primary" onclick="addStockToHoldings()">
+                        <i class="fas fa-plus"></i> Add Stock
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert Modal (same as before) -->
+    <div class="modal fade" id="alertModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-bell modal-icon"></i>
+                        <h5>Add Price Alert</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <form id="alert-form">
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-tag"></i> Ticker
+                            </label>
+                            <input type="text" class="input-modern" id="alert-ticker" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-filter"></i> Condition
+                            </label>
+                            <select class="input-modern" id="alert-condition" required>
+                                <option value="above">Price Above</option>
+                                <option value="below">Price Below</option>
+                                <option value="change_up">Change Up (%)</option>
+                                <option value="change_down">Change Down (%)</option>
+                            </select>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-hashtag"></i> Value
+                            </label>
+                            <input type="number" class="input-modern" id="alert-value" step="0.01" required>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer-modern">
+                    <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-modern btn-primary" onclick="addAlert()">
+                        <i class="fas fa-plus"></i> Add Alert
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Place Order Modal (same as before) -->
+    <div class="modal fade" id="orderModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-shopping-cart modal-icon"></i>
+                        <h5>Place Order</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <form id="order-form">
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-tag"></i> Ticker
+                            </label>
+                            <input type="text" class="input-modern" id="order-ticker" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-exchange-alt"></i> Transaction Type
+                            </label>
+                            <select class="input-modern" id="order-type" required>
+                                <option value="BUY">BUY</option>
+                                <option value="SELL">SELL</option>
+                            </select>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-sort-numeric-up"></i> Quantity
+                            </label>
+                            <input type="number" class="input-modern" id="order-quantity" min="1" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-list"></i> Order Type
+                            </label>
+                            <select class="input-modern" id="order-order-type">
+                                <option value="MARKET">Market</option>
+                                <option value="LIMIT">Limit</option>
+                                <option value="SL">Stop Loss</option>
+                            </select>
+                        </div>
+                        <div class="form-group-modern" id="price-input-container" style="display: none;">
+                            <label class="form-label-modern">
+                                <i class="fas fa-rupee-sign"></i> Price
+                            </label>
+                            <input type="number" class="input-modern" id="order-price" step="0.01">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer-modern">
+                    <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-modern btn-success" onclick="placeOrder()">
+                        <i class="fas fa-check"></i> Place Order
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart Modal -->
+    <div class="modal fade" id="chartModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-chart-line modal-icon"></i>
+                        <h5 id="chart-modal-title">Live Chart</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <canvas id="stockChart" style="max-height: 500px;"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/trading-platform.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/desktop-modal-fix.js') }}"></script>
+    <script>
+        // Additional fix for modal input clickability
+        document.addEventListener('DOMContentLoaded', function() {
+            // Ensure all modals have proper event handling
+            const modals = document.querySelectorAll('.modal');
+            modals.forEach(modal => {
+                modal.addEventListener('shown.bs.modal', function() {
+                    // Force enable all inputs
+                    const inputs = this.querySelectorAll('input, select, textarea, button');
+                    inputs.forEach(el => {
+                        el.style.pointerEvents = 'auto';
+                        el.style.zIndex = '10';
+                        el.disabled = false;
+                        el.readOnly = false;
+                    });
+                    
+                    // Focus first input
+                    const firstInput = this.querySelector('input[type="text"], input[type="password"], input[type="number"]');
+                    if (firstInput) {
+                        setTimeout(() => firstInput.focus(), 100);
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

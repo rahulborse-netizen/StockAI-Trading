@@ -1,0 +1,1152 @@
+/* Professional Trading Platform Styles - Upstox-like Design */
+
+/* Upstox-style Navigation Tabs */
+.nav-tabs-container {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    padding: 0 2rem;
+}
+
+.nav-tab {
+    padding: 1rem 1.5rem;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+}
+
+.nav-tab.active {
+    color: #8b5cf6; /* Purple like Upstox */
+    border-bottom-color: #8b5cf6;
+    background: var(--bg-secondary);
+}
+
+/* Position Filters */
+.positions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.position-filters {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.filter-btn {
+    padding: 0.5rem 1rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.filter-btn:hover {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.filter-btn.active {
+    background: #8b5cf6;
+    color: white;
+    border-color: #8b5cf6;
+}
+
+.daily-stats-bar {
+    display: flex;
+    gap: 2rem;
+    padding: 1rem 2rem;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+
+.stat-item {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.stat-label {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.stat-value {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+}
+
+.stat-value.positive {
+    color: var(--success-color);
+}
+
+.stat-value.negative {
+    color: var(--danger-color);
+}
+
+/* Paper Trading Toggle */
+.paper-trading-toggle-container {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 2rem;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.paper-trading-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #475569;
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: #10b981;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(26px);
+}
+
+.toggle-label {
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    user-select: none;
+}
+
+.toggle-label strong {
+    color: var(--text-secondary);
+}
+
+.toggle-switch input:checked ~ .toggle-label strong {
+    color: #10b981;
+}
+
+.paper-trading-info {
+    margin-left: auto;
+}
+
+/* Market Indices Bar */
+.indices-bar {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.75rem 2rem;
+    position: sticky;
+    top: 73px;
+    z-index: 999;
+    box-shadow: var(--shadow-sm);
+}
+
+.indices-container {
+    display: flex;
+    gap: 2rem;
+    max-width: 1920px;
+    margin: 0 auto;
+    flex-wrap: wrap;
+}
+
+.index-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 120px;
+    padding: 0.5rem 1rem;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.index-item:hover {
+    background: var(--bg-hover);
+    transform: translateY(-2px);
+}
+
+.index-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.index-value {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.index-change {
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.index-change.positive {
+    color: var(--success-color);
+}
+
+.index-change.negative {
+    color: var(--danger-color);
+}
+
+/* Main Layout */
+.main-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 1rem;
+    margin-top: 1rem;
+    max-width: 1920px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 0 2rem 2rem;
+}
+
+@media (max-width: 1200px) {
+    .main-layout {
+        grid-template-columns: 1fr;
+    }
+    .sidebar {
+        display: none;
+    }
+}
+
+/* Sidebar */
+.sidebar {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1rem;
+    height: fit-content;
+    position: sticky;
+    top: 150px;
+    max-height: calc(100vh - 160px);
+    overflow-y: auto;
+}
+
+.sidebar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-header h5 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.sidebar-search {
+    margin-bottom: 1rem;
+}
+
+.input-sm {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+}
+
+.stock-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.stock-list-item {
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.stock-list-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--primary-color);
+    transform: translateX(4px);
+}
+
+.stock-list-item.active {
+    background: var(--bg-hover);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.stock-list-item-info {
+    flex: 1;
+}
+
+.stock-list-item-symbol {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.stock-list-item-price {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
+.stock-list-item-change {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-align: right;
+}
+
+.stock-list-item-change.positive {
+    color: var(--success-color);
+}
+
+.stock-list-item-change.negative {
+    color: var(--danger-color);
+}
+
+/* Tabs Navigation */
+.tabs-nav {
+    display: flex;
+    gap: 0.5rem;
+    border-bottom: 2px solid var(--border-color);
+    margin-bottom: 1.5rem;
+    overflow-x: auto;
+}
+
+.tab-btn {
+    padding: 0.75rem 1.5rem;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+}
+
+.tab-btn.active {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-color);
+    background: var(--bg-secondary);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Holdings Header */
+.holdings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding: 1.5rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+
+.holdings-summary {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+}
+
+.summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.summary-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.summary-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.summary-item.profit .summary-value {
+    color: var(--success-color);
+}
+
+.summary-item.loss .summary-value {
+    color: var(--danger-color);
+}
+
+.holdings-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.holdings-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.holdings-tab {
+    padding: 0.75rem 1.5rem;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.holdings-tab:hover {
+    color: var(--text-primary);
+}
+
+.holdings-tab.active {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-color);
+}
+
+/* Stocks Table */
+.table-container {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    overflow-x: auto;
+}
+
+.stocks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.stocks-table thead {
+    background: var(--bg-secondary);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.stocks-table th {
+    padding: 1rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid var(--border-color);
+    white-space: nowrap;
+}
+
+.stocks-table td {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+.stocks-table tbody tr {
+    transition: all 0.2s ease;
+}
+
+.stocks-table tbody tr:hover {
+    background: var(--bg-secondary);
+}
+
+.stocks-table .symbol {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.stocks-table .positive {
+    color: var(--success-color);
+    font-weight: 600;
+}
+
+.stocks-table .negative {
+    color: var(--danger-color);
+    font-weight: 600;
+}
+
+.stocks-table .action-buttons {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.stocks-table .btn-action {
+    padding: 0.375rem 0.75rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: 500;
+}
+
+.stocks-table .btn-buy {
+    background: var(--success-color);
+    color: white;
+}
+
+.stocks-table .btn-sell {
+    background: var(--danger-color);
+    color: white;
+}
+
+.stocks-table .btn-view {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
+.stocks-table .btn-action:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+/* Watchlist Grid Modern */
+.watchlist-grid-modern {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+}
+
+.watchlist-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+
+.watchlist-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Signals Container */
+.signals-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 1.5rem;
+}
+
+.signals-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+
+.signals-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Positions Header */
+.positions-header,
+.orders-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+
+.positions-header h3,
+.orders-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Mobile Responsive Styles */
+/* Mobile Menu Button */
+.mobile-menu-btn {
+    display: none !important;
+}
+
+.mobile-hide {
+    display: inline;
+}
+
+.mobile-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+    /* When hidden, don't block any clicks/taps */
+    pointer-events: none;
+}
+
+.mobile-overlay.active {
+    display: block;
+    pointer-events: auto;
+}
+
+/* CRITICAL: When modal is open, mobile overlay must NOT block */
+body.modal-open .mobile-overlay {
+    display: none !important;
+    pointer-events: none !important;
+    z-index: -1 !important;
+}
+
+@media (max-width: 768px) {
+    .mobile-menu-btn {
+        display: inline-flex !important;
+    }
+    
+    .mobile-hide {
+        display: none !important;
+    }
+    
+    .mobile-close-btn {
+        display: block !important;
+    }
+    
+    /* Navigation */
+    .nav-container {
+        flex-direction: row;
+        gap: 0.5rem;
+        padding: 0.75rem 1rem;
+    }
+    
+    .nav-brand {
+        flex: 1;
+    }
+    
+    .brand-text h1 {
+        font-size: 1.125rem;
+    }
+    
+    .brand-text span {
+        font-size: 0.75rem;
+    }
+    
+    .brand-icon {
+        width: 40px;
+        height: 40px;
+        font-size: 1.25rem;
+    }
+    
+    .nav-actions {
+        gap: 0.5rem;
+    }
+    
+    .btn-modern.btn-icon {
+        padding: 0.5rem;
+    }
+    
+    .connection-status {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.75rem;
+    }
+    
+    /* Indices Bar */
+    .indices-bar {
+        padding: 0.5rem 1rem;
+        position: sticky;
+        top: 0;
+    }
+    
+    .indices-container {
+        gap: 0.5rem;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+    
+    .indices-container::-webkit-scrollbar {
+        display: none;
+    }
+    
+    .index-item {
+        min-width: 100px;
+        padding: 0.5rem;
+        flex-shrink: 0;
+    }
+    
+    .index-label {
+        font-size: 0.625rem;
+    }
+    
+    .index-value {
+        font-size: 0.875rem;
+    }
+    
+    .index-change {
+        font-size: 0.75rem;
+    }
+    
+    /* Main Layout */
+    .main-layout {
+        grid-template-columns: 1fr;
+        padding: 0 1rem 1rem;
+        gap: 1rem;
+    }
+    
+    .sidebar {
+        position: fixed;
+        left: -100%;
+        top: 73px;
+        width: 280px;
+        max-width: 85vw;
+        height: calc(100vh - 73px);
+        z-index: 1001;
+        transition: left 0.3s ease;
+        overflow-y: auto;
+        box-shadow: var(--shadow-xl);
+    }
+    
+    .sidebar.mobile-open {
+        left: 0;
+    }
+    
+    /* .mobile-overlay is shown only when .active is applied (see base rule above) */
+    
+    /* Tabs */
+    .tabs-nav {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        gap: 0.25rem;
+    }
+    
+    .tabs-nav::-webkit-scrollbar {
+        display: none;
+    }
+    
+    .tab-btn {
+        padding: 0.625rem 1rem;
+        font-size: 0.8125rem;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    
+    .tab-btn i {
+        display: none; /* Hide icons on mobile to save space */
+    }
+    
+    /* Holdings Header */
+    .holdings-header {
+        flex-direction: column;
+        gap: 1rem;
+        padding: 1rem;
+    }
+    
+    .holdings-summary {
+        width: 100%;
+        gap: 1rem;
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .summary-item {
+        min-width: 0;
+    }
+    
+    .summary-label {
+        font-size: 0.625rem;
+    }
+    
+    .summary-value {
+        font-size: 1.125rem;
+    }
+    
+    .holdings-actions {
+        width: 100%;
+        flex-direction: column;
+    }
+    
+    .holdings-actions .btn-modern {
+        width: 100%;
+    }
+    
+    /* Holdings Tabs */
+    .holdings-tabs {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+    
+    .holdings-tabs::-webkit-scrollbar {
+        display: none;
+    }
+    
+    .holdings-tab {
+        padding: 0.625rem 1rem;
+        font-size: 0.8125rem;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    
+    /* Table Container */
+    .table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        border-radius: 8px;
+    }
+    
+    .stocks-table {
+        font-size: 0.75rem;
+        min-width: 800px; /* Ensure table doesn't get too compressed */
+    }
+    
+    .stocks-table th,
+    .stocks-table td {
+        padding: 0.5rem 0.375rem;
+        white-space: nowrap;
+    }
+    
+    .stocks-table .symbol {
+        font-size: 0.8125rem;
+    }
+    
+    /* Action Buttons */
+    .action-buttons {
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+    
+    .btn-action {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.6875rem;
+        width: 100%;
+    }
+    
+    /* Watchlist Grid */
+    .watchlist-grid-modern {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+    }
+    
+    .watchlist-header {
+        flex-direction: column;
+        gap: 1rem;
+        padding: 1rem;
+    }
+    
+    .watchlist-header h3 {
+        font-size: 1rem;
+        width: 100%;
+    }
+    
+    .input-group-modern {
+        width: 100%;
+        flex-direction: column;
+    }
+    
+    .input-group-modern .input-modern {
+        width: 100%;
+    }
+    
+    .input-group-modern .btn-modern {
+        width: 100%;
+    }
+    
+    /* Signals Container */
+    .signals-container {
+        grid-template-columns: 1fr;
+    }
+    
+    .signals-header,
+    .positions-header,
+    .orders-header {
+        flex-direction: column;
+        gap: 1rem;
+        padding: 1rem;
+    }
+    
+    .signals-header h3,
+    .positions-header h3,
+    .orders-header h3 {
+        font-size: 1rem;
+        width: 100%;
+    }
+    
+    /* Modals */
+    .modal-dialog {
+        margin: 0.5rem;
+        max-width: calc(100% - 1rem);
+    }
+    
+    .modal-content-modern {
+        border-radius: 12px;
+    }
+    
+    .modal-header-modern,
+    .modal-body-modern,
+    .modal-footer-modern {
+        padding: 1rem;
+    }
+    
+    .modal-footer-modern {
+        flex-direction: column;
+    }
+    
+    .modal-footer-modern .btn-modern {
+        width: 100%;
+    }
+    
+    /* Stats Bar */
+    .stats-bar {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+        margin: 1rem;
+    }
+    
+    .stat-card {
+        padding: 1rem;
+    }
+    
+    .stat-icon {
+        width: 40px;
+        height: 40px;
+        font-size: 1.25rem;
+    }
+    
+    .stat-value {
+        font-size: 1.125rem;
+    }
+    
+    .stat-label {
+        font-size: 0.625rem;
+    }
+    
+    /* Dashboard Container */
+    .dashboard-container {
+        padding: 0;
+    }
+    
+    /* Empty States */
+    .empty-state {
+        padding: 2rem 1rem;
+    }
+    
+    .empty-state i {
+        font-size: 2rem;
+    }
+    
+    .empty-state p {
+        font-size: 0.8125rem;
+    }
+}
+
+/* Extra Small Devices */
+@media (max-width: 480px) {
+    .indices-container {
+        gap: 0.375rem;
+    }
+    
+    .index-item {
+        min-width: 90px;
+        padding: 0.375rem;
+    }
+    
+    .stats-bar {
+        grid-template-columns: 1fr;
+    }
+    
+    .holdings-summary {
+        grid-template-columns: 1fr;
+    }
+    
+    .summary-value {
+        font-size: 1rem;
+    }
+    
+    .stocks-table {
+        font-size: 0.6875rem;
+        min-width: 700px;
+    }
+    
+    .stocks-table th,
+    .stocks-table td {
+        padding: 0.375rem 0.25rem;
+    }
+    
+    .tab-btn {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.75rem;
+    }
+    
+    .holdings-tab {
+        padding: 0.5rem 1rem;
+        font-size: 0.75rem;
+    }
+}
+
+/* Touch-friendly elements */
+@media (hover: none) and (pointer: coarse) {
+    .btn-modern,
+    .tab-btn,
+    .holdings-tab,
+    .stock-list-item,
+    .stocks-table tbody tr {
+        min-height: 44px; /* iOS touch target size */
+    }
+    
+    .input-modern {
+        min-height: 44px;
+        font-size: 16px; /* Prevents zoom on iOS */
+    }
+    
+    .btn-action {
+        min-width: 44px;
+        min-height: 44px;
+    }
+    
+    /* Larger touch targets for mobile */
+    .watchlist-item,
+    .top-stock-card {
+        min-height: 80px;
+        padding: 1rem;
+    }
+    
+    /* Better spacing for mobile */
+    .form-group-modern {
+        margin-bottom: 1.25rem;
+    }
+}
+
+/* Landscape mobile optimization */
+@media (max-width: 768px) and (orientation: landscape) {
+    .indices-bar {
+        padding: 0.5rem;
+    }
+    
+    .indices-container {
+        gap: 0.5rem;
+    }
+    
+    .index-item {
+        min-width: 80px;
+        padding: 0.375rem;
+    }
+    
+    .main-layout {
+        padding: 0 0.5rem 0.5rem;
+    }
+    
+    .holdings-header {
+        padding: 0.75rem;
+    }
+    
+    .stocks-table th,
+    .stocks-table td {
+        padding: 0.375rem 0.25rem;
+    }
+}

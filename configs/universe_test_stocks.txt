@@ -1,0 +1,6 @@
+# Test universe with top 5 NIFTY50 stocks for quick analysis
+RELIANCE.NS
+TCS.NS
+INFY.NS
+HDFCBANK.NS
+ICICIBANK.NS

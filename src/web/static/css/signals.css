@@ -1,0 +1,141 @@
+/* Trading Signals Styles */
+
+.index-signals-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin: 1.5rem 0;
+}
+
+.signal-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    transition: all 0.3s ease;
+}
+
+.signal-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--primary-color);
+}
+
+.signal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.signal-header h4 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+
+.signal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.signal-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+}
+
+.signal-item .label {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.signal-item .value {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.signal-item .value.positive {
+    color: var(--success-color);
+}
+
+.signal-item .value.negative {
+    color: var(--danger-color);
+}
+
+/* Signal badges in table */
+.badge {
+    padding: 0.375rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.bg-success {
+    background-color: var(--success-color) !important;
+    color: white;
+}
+
+.bg-danger {
+    background-color: var(--danger-color) !important;
+    color: white;
+}
+
+.bg-warning {
+    background-color: var(--warning-color) !important;
+    color: white;
+}
+
+.bg-secondary {
+    background-color: var(--text-muted) !important;
+    color: white;
+}
+
+/* Chart button in table */
+.btn-action {
+    padding: 0.375rem 0.75rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+    margin: 0 0.25rem;
+}
+
+.btn-action.btn-view {
+    background: var(--primary-color);
+    color: white;
+}
+
+.btn-action.btn-view:hover {
+    background: var(--primary-dark);
+    transform: scale(1.05);
+}
+
+/* Signals actions header */
+.signals-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.signals-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.signals-header h3 {
+    margin: 0;
+    color: var(--text-primary);
+}

@@ -1,0 +1,15 @@
+numpy
+pandas
+scikit-learn
+matplotlib
+seaborn
+requests
+flask
+flask-cors
+python-dotenv
+kiteconnect
+backtrader
+jupyter
+pytest
+yfinance
+joblib

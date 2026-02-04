@@ -1,0 +1,136 @@
+/* Trade Plans Styling */
+
+.trade-plans-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-card, #1e293b);
+    border-radius: 8px;
+}
+
+.trade-plans-header h3 {
+    margin: 0;
+    color: var(--text-primary, #f1f5f9);
+}
+
+.trade-plans-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.filters-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.generate-plan-section {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.trade-plans-container {
+    min-height: 400px;
+}
+
+.trade-plan-card {
+    background: var(--bg-card, #1e293b);
+    border: 1px solid var(--border-color, #334155);
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
+.trade-plan-card:hover {
+    border-color: var(--primary-color, #6366f1);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+}
+
+.trade-plan-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.detail-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--border-color, #334155);
+}
+
+.detail-item:last-child {
+    border-bottom: none;
+}
+
+.detail-item .label {
+    color: var(--text-secondary, #94a3b8);
+    font-size: 0.875rem;
+}
+
+.detail-item .value {
+    color: var(--text-primary, #f1f5f9);
+    font-weight: 500;
+}
+
+.trade-plan-detail {
+    color: var(--text-primary, #f1f5f9);
+}
+
+.trade-plan-detail h4 {
+    margin-bottom: 0.5rem;
+}
+
+.trade-plan-detail h6 {
+    margin-top: 1rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-secondary, #94a3b8);
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.trade-plan-detail .table {
+    color: var(--text-primary, #f1f5f9);
+    background: transparent;
+}
+
+.trade-plan-detail .table td {
+    border-color: var(--border-color, #334155);
+    padding: 0.5rem;
+}
+
+.trade-plan-detail .table td:first-child {
+    color: var(--text-secondary, #94a3b8);
+    width: 40%;
+}
+
+.trade-plan-detail .table td:last-child {
+    font-weight: 500;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .trade-plans-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+    
+    .filters-row,
+    .generate-plan-section {
+        flex-wrap: wrap;
+        width: 100%;
+    }
+    
+    .filters-row select,
+    .filters-row input,
+    .generate-plan-section input,
+    .generate-plan-section select {
+        flex: 1;
+        min-width: 120px;
+    }
+}

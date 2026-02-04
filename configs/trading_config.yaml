@@ -1,0 +1,47 @@
+# Trading Algorithm Configuration
+# Risk Management Parameters
+
+risk_management:
+  # Maximum risk per trade as percentage of capital (0.02 = 2%)
+  max_risk_per_trade: 0.02
+  
+  # Maximum position size as percentage of capital (0.20 = 20%)
+  max_position_size: 0.20
+  
+  # Maximum daily risk limit as percentage of capital (0.05 = 5%)
+  max_daily_risk: 0.05
+  
+  # Maximum portfolio-wide risk as percentage of capital (0.30 = 30%)
+  max_portfolio_risk: 0.30
+  
+  # Minimum lot size (can be instrument-specific)
+  min_lot_size: 1
+  
+  # Minimum risk-reward ratio (1.5 = 1.5:1)
+  min_risk_reward_ratio: 1.5
+  
+  # Maximum number of open positions
+  max_open_positions: 10
+
+# Trading Type Specific Configurations
+trading_types:
+  intraday:
+    default_stop_loss_pct: 0.02  # 2%
+    default_target_1_pct: 0.01   # 1%
+    default_target_2_pct: 0.015  # 1.5%
+    product: "I"  # Intraday
+    validity: "DAY"
+  
+  swing:
+    default_stop_loss_pct: 0.03  # 3%
+    default_target_1_pct: 0.03  # 3%
+    default_target_2_pct: 0.05  # 5%
+    product: "D"  # Delivery
+    validity: "DAY"
+  
+  position:
+    default_stop_loss_pct: 0.05  # 5%
+    default_target_1_pct: 0.05  # 5%
+    default_target_2_pct: 0.10  # 10%
+    product: "D"  # Delivery
+    validity: "DAY"

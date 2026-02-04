@@ -1,0 +1,15 @@
+# Cursor environment blocks creating dotfiles in some workspaces.
+# Copy these rules into a real `.gitignore` at repo root.
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+cache/
+outputs/
+data/*.json
+!data/watchlist.json
+*.log
+*.sqlite3
