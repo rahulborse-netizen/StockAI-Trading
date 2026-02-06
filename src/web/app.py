@@ -2760,6 +2760,99 @@ def record_portfolio_snapshot():
         logger.error(f"Error recording portfolio snapshot: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/portfolio/summary', methods=['GET'])
+def get_portfolio_summary():
+    """
+    Get portfolio summary with Day P&L
+    Combines holdings, positions, and paper trading data
+    """
+    try:
+        mode_manager = get_trading_mode_manager()
+        paper_mode = mode_manager.is_paper_mode()
+        
+        # Get data based on trading mode
+        if paper_mode:
+            # Paper trading mode
+            paper_manager = get_paper_trading_manager()
+            summary = paper_manager.get_portfolio_summary()
+            
+            # Get today's P&L from holdings database
+            holdings_db = get_holdings_db()
+            latest_snapshot = holdings_db.get_latest_snapshot()
+            
+            day_pnl = latest_snapshot.get('daily_pnl', 0) if latest_snapshot else 0
+            
+            return jsonify({
+                'status': 'success',
+                'mode': 'paper',
+                'total_value': summary.get('total_value', 0),
+                'cash_balance': summary.get('cash_balance', 0),
+                'position_value': summary.get('position_value', 0),
+                'invested_value': summary.get('invested_value', 0),
+                'total_pnl': summary.get('total_pnl', 0),
+                'total_pnl_pct': summary.get('total_pnl_pct', 0),
+                'day_pnl': day_pnl,
+                'day_pnl_pct': (day_pnl / summary.get('total_value', 1) * 100) if summary.get('total_value', 0) > 0 else 0,
+                'num_positions': summary.get('num_positions', 0)
+            })
+        else:
+            # Live trading mode - get from Upstox
+            client = _get_upstox_client()
+            if not client:
+                return jsonify({'error': 'Upstox not connected'}), 400
+            
+            # Get holdings
+            holdings = client.get_holdings()
+            positions = client.get_positions()
+            
+            # Calculate portfolio value
+            total_invested = 0
+            total_current_value = 0
+            
+            for holding in holdings:
+                qty = float(holding.get('quantity', 0))
+                avg_price = float(holding.get('average_price', 0) or holding.get('buy_price', 0))
+                current_price = float(holding.get('last_price', 0) or holding.get('ltp', 0))
+                
+                total_invested += qty * avg_price
+                total_current_value += qty * current_price
+            
+            # Add positions
+            for pos in positions:
+                qty = float(pos.get('quantity', 0) or pos.get('net_quantity', 0))
+                avg_price = float(pos.get('average_price', 0) or pos.get('buy_price', 0))
+                current_price = float(pos.get('last_price', 0) or pos.get('ltp', 0))
+                
+                total_current_value += qty * current_price
+                total_invested += qty * avg_price
+            
+            total_pnl = total_current_value - total_invested
+            total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+            
+            # Get Day P&L from holdings database
+            holdings_db = get_holdings_db()
+            latest_snapshot = holdings_db.get_latest_snapshot()
+            day_pnl = latest_snapshot.get('daily_pnl', 0) if latest_snapshot else 0
+            day_pnl_pct = (day_pnl / total_current_value * 100) if total_current_value > 0 else 0
+            
+            return jsonify({
+                'status': 'success',
+                'mode': 'live',
+                'total_value': total_current_value,
+                'invested_value': total_invested,
+                'total_pnl': total_pnl,
+                'total_pnl_pct': total_pnl_pct,
+                'day_pnl': day_pnl,
+                'day_pnl_pct': day_pnl_pct,
+                'num_positions': len(holdings) + len(positions)
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting portfolio summary: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
 # ========================================
 # STRATEGY API ENDPOINTS
 # Phase 3: Advanced Quant Strategies

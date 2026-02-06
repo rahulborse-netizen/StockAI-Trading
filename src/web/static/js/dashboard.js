@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAlerts();
     loadOrders();
     updateStats();
+    updatePortfolioSummary();
     
     // Fallback: Auto-refresh prices every 30 seconds if WebSocket fails
     priceUpdateInterval = setInterval(() => {
@@ -49,6 +50,8 @@ document.addEventListener('DOMContentLoaded', function() {
             updatePrices();
             updateStats();
         }
+        // Always update portfolio summary (includes P&L from database)
+        updatePortfolioSummary();
     }, 30000);
     
     // Show price input when order type changes
@@ -89,6 +92,10 @@ window.toggleTheme = toggleTheme;
 // Update Stats
 async function updateStats() {
     try {
+        // Update portfolio summary (Overall P&L and Day P&L)
+        await updatePortfolioSummary();
+        
+        // Update watchlist prices
         const response = await fetch('/api/prices');
         const prices = await response.json();
         
@@ -106,13 +113,7 @@ async function updateStats() {
             }
         });
         
-        // Update portfolio value
-        const portfolioEl = document.getElementById('portfolio-value');
-        if (portfolioEl) {
-            portfolioEl.textContent = `₹${totalValue.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-        }
-        
-        // Update P&L
+        // Update today's P&L (if element exists - old element ID)
         const pnlEl = document.getElementById('today-pnl');
         if (pnlEl) {
             const pnlClass = totalChange >= 0 ? 'price-up' : 'price-down';
@@ -1540,11 +1541,92 @@ function showNotification(message, type = 'info') {
         }, 3000);
 }
 
+// Refresh Holdings
+async function refreshHoldings() {
+    try {
+        showNotification('Refreshing holdings...', 'info');
+        
+        // Update portfolio summary
+        await updatePortfolioSummary();
+        
+        // Record a portfolio snapshot
+        try {
+            await fetch('/api/portfolio/record_snapshot', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+        } catch (e) {
+            console.log('Note: Could not record snapshot (may need holdings data)');
+        }
+        
+        // Refresh prices
+        await updatePrices();
+        
+        showNotification('✅ Holdings refreshed!', 'success');
+    } catch (error) {
+        console.error('Error refreshing holdings:', error);
+        showNotification('❌ Error refreshing holdings', 'error');
+    }
+}
+
 // Make functions globally available for other scripts
 window.showNotification = showNotification;
 window.showUpstoxModal = showUpstoxModal;
 window.setTheme = setTheme;
 window.toggleTheme = toggleTheme;
+window.refreshHoldings = refreshHoldings;
+window.updatePortfolioSummary = updatePortfolioSummary;
+
+// Update Portfolio Summary (Overall P&L and Day P&L)
+async function updatePortfolioSummary() {
+    try {
+        const response = await fetch('/api/portfolio/summary');
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            // Update Overall P&L
+            const overallPnlEl = document.getElementById('overall-pnl');
+            if (overallPnlEl) {
+                const pnl = data.total_pnl || 0;
+                const pnlPct = data.total_pnl_pct || 0;
+                const pnlClass = pnl >= 0 ? 'price-up' : 'price-down';
+                const sign = pnl >= 0 ? '+' : '';
+                
+                overallPnlEl.innerHTML = `<span class="${pnlClass}">${sign}₹${Math.abs(pnl).toFixed(2)} (${sign}${pnlPct.toFixed(2)}%)</span>`;
+            }
+            
+            // Update Day P&L
+            const dayPnlEl = document.getElementById('day-pnl');
+            if (dayPnlEl) {
+                const dayPnl = data.day_pnl || 0;
+                const dayPnlPct = data.day_pnl_pct || 0;
+                const pnlClass = dayPnl >= 0 ? 'price-up' : 'price-down';
+                const sign = dayPnl >= 0 ? '+' : '';
+                
+                dayPnlEl.innerHTML = `<span class="${pnlClass}">${sign}₹${Math.abs(dayPnl).toFixed(2)} (${sign}${dayPnlPct.toFixed(2)}%)</span>`;
+            }
+            
+            // Update portfolio value if element exists
+            const portfolioValueEl = document.getElementById('portfolio-value');
+            if (portfolioValueEl) {
+                portfolioValueEl.textContent = `₹${(data.total_value || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            }
+            
+            // Update cash balance if element exists
+            const cashBalanceEl = document.getElementById('cash-balance');
+            if (cashBalanceEl) {
+                cashBalanceEl.textContent = `₹${(data.cash_balance || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            }
+        }
+    } catch (error) {
+        console.error('Error updating portfolio summary:', error);
+        // Set default values on error
+        const dayPnlEl = document.getElementById('day-pnl');
+        if (dayPnlEl) {
+            dayPnlEl.innerHTML = '<span class="text-muted">₹0.00 (+0.00%)</span>';
+        }
+    }
+}
 
 // Phase 2.3: Update positions P&L with real-time prices (placeholder - will be implemented in position-pnl task)
 function updatePositionsPnL(instrumentKey, currentPrice) {
