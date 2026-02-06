@@ -18,11 +18,15 @@ if __name__ == '__main__':
     print("Open your browser and go to: http://localhost:5000")
     print("="*60)
     try:
-        app.run(debug=True, host='0.0.0.0', port=5000)
+        # Import socketio for WebSocket support
+        from src.web.app import socketio
+        socketio.run(app, debug=True, host='0.0.0.0', port=5000, use_reloader=True)
     except Exception as e:
         print(f"Error starting server: {e}")
         print("\nTroubleshooting:")
         print("1. Make sure you're in the project root directory")
         print("2. Install dependencies: pip install -r requirements.txt")
         print("3. Check if port 5000 is already in use")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)

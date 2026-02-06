@@ -18,6 +18,8 @@
     <link href="{{ url_for('static', filename='css/trading-platform.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/signals.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/trade-plans.css') }}" rel="stylesheet">
+    <!-- Phase 2: Real-time trading enhancements -->
+    <link href="{{ url_for('static', filename='css/phase2.css') }}" rel="stylesheet">
 </head>
 <body class="dashboard-body">
     <!-- Top Navigation Bar -->
@@ -44,6 +46,10 @@
                     <i class="fas fa-circle"></i>
                     <span class="mobile-hide">Disconnected</span>
                 </div>
+                <!-- Phase 2.1: WebSocket connection status -->
+                <div class="connection-status" id="ws-connection-status" style="font-size: 0.75rem; margin-left: 0.5rem;">
+                    <span>○ Disconnected</span>
+                </div>
                 <button class="btn-modern btn-icon" onclick="toggleTheme()" title="Toggle Theme">
                     <i class="fas fa-moon" id="theme-icon"></i>
                 </button>
@@ -68,8 +74,19 @@
                 </button>
             </div>
             
-            <!-- Paper Trading Mode Toggle -->
-            <div class="paper-trading-toggle-container">
+            <!-- Phase 2.5: Trading Mode Toggle -->
+            <div class="trading-mode-toggle">
+                <div class="mode-indicator">
+                    <span class="mode-label">Trading Mode:</span>
+                    <span class="mode-badge paper" id="mode-badge">PAPER</span>
+                </div>
+                <button id="toggle-mode-btn" class="btn-toggle-mode" onclick="showModeSwitchModal()">
+                    Switch to Live Trading
+                </button>
+            </div>
+            
+            <!-- Paper Trading Mode Toggle (Legacy - keep for compatibility) -->
+            <div class="paper-trading-toggle-container" style="display: none;">
                 <div class="paper-trading-toggle">
                     <label class="toggle-switch">
                         <input type="checkbox" id="paper-trading-toggle" onchange="togglePaperTrading()">
@@ -88,9 +105,10 @@
 
     <!-- Market Indices Bar -->
     <div class="indices-bar">
-        <div class="indices-container">
+        <div class="indices-container" id="indices-container-main">
+            <!-- Major Indices (Always Visible) -->
             <div class="index-item" id="index-nifty">
-                <div class="index-label">NIFTY</div>
+                <div class="index-label">NIFTY 50</div>
                 <div class="index-value">--</div>
                 <div class="index-change">--</div>
             </div>
@@ -108,6 +126,15 @@
                 <div class="index-label">INDIA VIX</div>
                 <div class="index-value">--</div>
                 <div class="index-change">--</div>
+            </div>
+        </div>
+        <!-- Sectoral Indices (Expandable) -->
+        <div class="indices-expand-container" style="margin-top: 0.5rem;">
+            <button class="btn-modern btn-sm" onclick="toggleSectoralIndices()" id="toggle-indices-btn" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;">
+                <i class="fas fa-chevron-down" id="indices-toggle-icon"></i> More Indices
+            </button>
+            <div id="sectoral-indices-container" style="display: none; margin-top: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+                <!-- Sectoral indices will be loaded here -->
             </div>
         </div>
     </div>
@@ -159,6 +186,10 @@
                     </button>
                     <button class="tab-btn" onclick="switchTab('trade-plans')" data-tab="trade-plans" id="trade-plans-tab">
                         <i class="fas fa-clipboard-list"></i> Trade Plans
+                    </button>
+                    <!-- Phase 2.4: Analytics Tab -->
+                    <button class="tab-btn" onclick="switchTab('analytics')" data-tab="analytics">
+                        <i class="fas fa-chart-bar"></i> Analytics
                     </button>
                 </div>
 
@@ -277,13 +308,13 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th>
-                                    <th>Qty</th>
+                                    <th>Qty / Type</th>
                                     <th>Entry Price</th>
-                                    <th>Exit Price</th>
-                                    <th>Entry Time</th>
-                                    <th>Exit Time</th>
+                                    <th>LTP</th>
+                                    <th>Current Value</th>
                                     <th>P&L</th>
                                     <th>P&L %</th>
+                                    <th>Product</th>
                                     <th>Status</th>
                                     <th>Actions</th>
                                 </tr>
@@ -401,6 +432,62 @@
                     <div class="trade-plans-container" id="trade-plans-container">
                         <div class="text-center text-muted p-4">
                             <i class="fas fa-spinner fa-spin"></i> Loading trade plans...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Phase 2.4: Analytics Tab -->
+                <div class="tab-content" id="tab-analytics">
+                    <div class="analytics-header">
+                        <h3><i class="fas fa-chart-bar"></i> Portfolio Analytics</h3>
+                        <button class="btn-modern btn-primary" onclick="recordPortfolioSnapshot()">
+                            <i class="fas fa-camera"></i> Record Snapshot
+                        </button>
+                    </div>
+                    
+                    <div class="analytics-grid">
+                        <!-- Portfolio Value Chart -->
+                        <div class="chart-container">
+                            <h5>Portfolio Value Over Time</h5>
+                            <canvas id="portfolio-value-chart"></canvas>
+                        </div>
+                        
+                        <!-- Key Metrics -->
+                        <div class="metrics-container">
+                            <div class="metric-card">
+                                <div class="metric-label">Total Value</div>
+                                <div class="metric-value" id="metric-total-value">₹0.00</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Total P&L</div>
+                                <div class="metric-value" id="metric-total-pnl">₹0.00</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Time-Weighted Return</div>
+                                <div class="metric-value" id="metric-twr">0.00%</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Win Rate</div>
+                                <div class="metric-value" id="metric-win-rate">0%</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Daily P&L Chart -->
+                        <div class="chart-container">
+                            <h5>Daily P&L</h5>
+                            <canvas id="daily-pnl-chart"></canvas>
+                        </div>
+                        
+                        <!-- Asset Allocation Chart -->
+                        <div class="chart-container">
+                            <h5>Asset Allocation</h5>
+                            <canvas id="allocation-chart"></canvas>
+                        </div>
+                        
+                        <!-- Returns Comparison Chart -->
+                        <div class="chart-container">
+                            <h5>Returns Comparison</h5>
+                            <canvas id="returns-comparison-chart"></canvas>
                         </div>
                     </div>
                 </div>
@@ -681,7 +768,115 @@
         </div>
     </div>
 
+    <!-- Phase 2.5: Trading Mode Switch Warning Modal -->
+    <div class="modal fade" id="modeSwitchModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern" style="background: #ef4444; color: white;">
+                    <div class="modal-title-section">
+                        <i class="fas fa-exclamation-triangle modal-icon"></i>
+                        <h5>⚠️ SWITCH TO LIVE TRADING?</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <div class="warning-content">
+                        <p style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem;">
+                            You are about to enable <strong style="color: #ef4444;">LIVE TRADING</strong> with <strong style="color: #ef4444;">REAL MONEY</strong>.
+                        </p>
+                        <p>All orders will execute on the exchange and use real funds from your account.</p>
+                        
+                        <div class="warning-list">
+                            <h6>Important:</h6>
+                            <ul>
+                                <li>Orders will execute with real money</li>
+                                <li>You will be charged brokerage and taxes</li>
+                                <li>Losses will affect your actual account balance</li>
+                                <li>Make sure you understand the risks</li>
+                            </ul>
+                        </div>
+                        
+                        <div class="confirmation-input">
+                            <label>
+                                Type <strong>"CONFIRM"</strong> to enable live trading:
+                            </label>
+                            <input type="text" class="input-modern" id="mode-confirm-input" placeholder="Type CONFIRM here">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer-modern">
+                    <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-modern btn-danger" id="confirm-mode-switch-btn" onclick="confirmModeSwitch()" disabled>
+                        I UNDERSTAND - ENABLE LIVE TRADING
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 2.2: Order Modify Modal -->
+    <div class="modal fade" id="orderModifyModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-edit modal-icon"></i>
+                        <h5>Modify Order</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <form id="order-modify-form">
+                        <input type="hidden" id="modify-order-id">
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-tag"></i> Symbol
+                            </label>
+                            <input type="text" class="input-modern" id="modify-symbol" readonly>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-sort-numeric-up"></i> Quantity
+                            </label>
+                            <input type="number" class="input-modern" id="modify-quantity" min="1" required>
+                        </div>
+                        <div class="form-group-modern">
+                            <label class="form-label-modern">
+                                <i class="fas fa-list"></i> Order Type
+                            </label>
+                            <select class="input-modern" id="modify-order-type">
+                                <option value="MARKET">Market</option>
+                                <option value="LIMIT">Limit</option>
+                                <option value="SL">Stop Loss</option>
+                            </select>
+                        </div>
+                        <div class="form-group-modern" id="modify-price-container">
+                            <label class="form-label-modern">
+                                <i class="fas fa-rupee-sign"></i> Price
+                            </label>
+                            <input type="number" class="input-modern" id="modify-price" step="0.01">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer-modern">
+                    <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-modern btn-primary" onclick="submitOrderModification()">
+                        <i class="fas fa-check"></i> Modify Order
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Phase 2.1: Socket.IO for WebSocket support -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <!-- Phase 2.1: WebSocket client for real-time updates -->
+    <script src="{{ url_for('static', filename='js/websocket-client.js') }}"></script>
+    <!-- Phase 2.2: Order confirmation system -->
+    <script src="{{ url_for('static', filename='js/order-confirmation.js') }}"></script>
+    <!-- Phase 2.5: Trading mode management -->
+    <script src="{{ url_for('static', filename='js/trading-mode.js') }}"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/trading-platform.js') }}"></script>
     <script src="{{ url_for('static', filename='js/charts.js') }}"></script>

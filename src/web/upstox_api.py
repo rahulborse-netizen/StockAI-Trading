@@ -72,6 +72,10 @@ class UpstoxAPI:
                         'Accept': 'application/json'
                     })
                     print(f"[DEBUG] Access token obtained successfully")
+                    # Return refresh token if available for token refresh functionality
+                    refresh_token = result.get('refresh_token')
+                    if refresh_token:
+                        return {'access_token': self.access_token, 'refresh_token': refresh_token}
                     return True
                 else:
                     print(f"[ERROR] No access_token in response: {result}")
@@ -111,6 +115,78 @@ class UpstoxAPI:
             'Authorization': f'Bearer {self.access_token}',
             'Accept': 'application/json'
         })
+    
+    def refresh_access_token(self, refresh_token: str) -> bool:
+        """
+        Refresh access token using refresh token
+        Upstox v2 API uses refresh_token grant type
+        """
+        try:
+            url = f"{self.BASE_URL}/login/authorization/token"
+            data = {
+                'grant_type': 'refresh_token',
+                'client_id': self.api_key,
+                'client_secret': self.api_secret,
+                'refresh_token': refresh_token
+            }
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Accept': 'application/json'
+            }
+            
+            logger.info("[UpstoxAPI] Refreshing access token...")
+            response = self.session.post(url, data=data, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                new_access_token = result.get('access_token')
+                new_refresh_token = result.get('refresh_token')
+                
+                if new_access_token:
+                    self.set_access_token(new_access_token)
+                    logger.info("[UpstoxAPI] Access token refreshed successfully")
+                    
+                    # Return refresh token if provided (for storage)
+                    if new_refresh_token:
+                        return {'access_token': new_access_token, 'refresh_token': new_refresh_token}
+                    return {'access_token': new_access_token}
+                else:
+                    logger.error(f"[UpstoxAPI] No access_token in refresh response: {result}")
+                    return None
+            else:
+                error_text = response.text
+                logger.error(f"[UpstoxAPI] Token refresh failed: {response.status_code} - {error_text[:200]}")
+                return None
+        except Exception as e:
+            logger.error(f"[UpstoxAPI] Exception refreshing token: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+    
+    def check_connection_health(self) -> Dict:
+        """
+        Check connection health by making a lightweight API call
+        Returns: {'healthy': bool, 'message': str, 'profile': dict}
+        """
+        try:
+            profile = self.get_profile()
+            if 'error' in profile:
+                return {
+                    'healthy': False,
+                    'message': profile.get('error', 'Connection check failed'),
+                    'profile': None
+                }
+            return {
+                'healthy': True,
+                'message': 'Connection is healthy',
+                'profile': profile
+            }
+        except Exception as e:
+            return {
+                'healthy': False,
+                'message': f'Health check exception: {str(e)}',
+                'profile': None
+            }
     
     def get_profile(self) -> Dict:
         """Get user profile with timeout"""

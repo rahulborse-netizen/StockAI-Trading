@@ -91,8 +91,8 @@ class UpstoxConnectionManager:
             f'http://{local_ip}:5000/callback'
         ]
     
-    def save_connection(self, api_key: str, api_secret: str, redirect_uri: str, access_token: Optional[str] = None):
-        """Save connection details to session"""
+    def save_connection(self, api_key: str, api_secret: str, redirect_uri: str, access_token: Optional[str] = None, refresh_token: Optional[str] = None):
+        """Save connection details to session with persistence"""
         session['upstox_api_key'] = api_key
         session['upstox_api_secret'] = api_secret
         session['upstox_redirect_uri'] = redirect_uri
@@ -101,10 +101,56 @@ class UpstoxConnectionManager:
         if access_token:
             session['upstox_access_token'] = access_token
         
+        if refresh_token:
+            session['upstox_refresh_token'] = refresh_token
+        
+        # Store connection timestamp for tracking
+        from datetime import datetime
+        session['upstox_connected_at'] = datetime.now().isoformat()
+        
         # Rebuild client
         self.client = UpstoxAPI(api_key, api_secret, redirect_uri)
         if access_token:
             self.client.set_access_token(access_token)
+    
+    def refresh_token_if_needed(self) -> bool:
+        """
+        Check if token needs refresh and refresh if needed
+        Returns: True if refreshed successfully, False otherwise
+        """
+        refresh_token = session.get('upstox_refresh_token')
+        if not refresh_token:
+            logger.debug("[ConnectionManager] No refresh token available")
+            return False
+        
+        client = self.get_client()
+        if not client:
+            logger.warning("[ConnectionManager] Cannot refresh token - no client")
+            return False
+        
+        # Check connection health first
+        health = client.check_connection_health()
+        if health['healthy']:
+            logger.debug("[ConnectionManager] Connection is healthy, no refresh needed")
+            return True
+        
+        # Try to refresh token
+        logger.info("[ConnectionManager] Connection unhealthy, attempting token refresh...")
+        result = client.refresh_access_token(refresh_token)
+        
+        if result and isinstance(result, dict) and 'access_token' in result:
+            # Save new tokens
+            session['upstox_access_token'] = result['access_token']
+            if 'refresh_token' in result:
+                session['upstox_refresh_token'] = result['refresh_token']
+            
+            # Update client
+            client.set_access_token(result['access_token'])
+            logger.info("[ConnectionManager] Token refreshed successfully")
+            return True
+        else:
+            logger.warning("[ConnectionManager] Token refresh failed")
+            return False
     
     def clear_connection(self):
         """Clear connection from session"""

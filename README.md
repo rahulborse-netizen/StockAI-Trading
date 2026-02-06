@@ -129,9 +129,19 @@ The project is organized into several directories and files, each serving a spec
      python -m src.cli visualize --outdir outputs/reliance --ticker RELIANCE.NS
      ```
 
-5. Run the (placeholder) real-time app:
+5. Run the web dashboard:
+   ```bash
+   # First, run migration script for Phase 2 features
+   python scripts/migrate_to_phase2.py
+   
+   # Then start the web server
+   python run_web.py
    ```
-   python src/main.py
+   Open `http://localhost:5000` in your browser to access the dashboard.
+
+6. (Optional) Run Phase 2 integration tests:
+   ```bash
+   pytest tests/test_phase2_integration.py -v
    ```
 
 ## Safety / Disclaimer
@@ -145,6 +155,25 @@ Live trading is intentionally **not enabled by default**. If you want to integra
 - Provide credentials via environment variables / `.env` (never commit secrets)
 
 ## Features
+
+### Phase 2: Real-time Trading Enhancements ✅
+- **Real-time WebSocket Data Streaming**: Live price updates via WebSocket with < 100ms latency
+- **Enhanced Order Management**: Modify and cancel orders with status indicators
+- **Real-time Position P&L**: Live P&L calculations and updates
+- **Holdings Analytics**: Historical portfolio tracking with SQLite database
+- **Portfolio Performance Charts**: Value over time, daily P&L, asset allocation, returns comparison
+- **Paper Trading Mode Toggle**: Safe switching between paper and live trading modes
+- **Order Confirmation System**: Risk warnings and two-step confirmation for market orders
+- **Position Analytics**: Win/loss ratio, exit quality analysis, holding period returns
+
+### Phase 3: ELITE AI Trading System ✅ (Tier 1 Complete)
+- **Multi-Model Ensemble**: Combines Logistic Regression, XGBoost, and LSTM for superior predictions
+- **Advanced Feature Engineering**: 50+ technical indicators (Bollinger Bands, ATR, ADX, Stochastic, Ichimoku, etc.)
+- **Multi-Timeframe Analysis**: Analyzes 1m, 5m, 15m, 1h, 1d timeframes with weighted consensus
+- **Model Performance Tracking**: Accuracy, win rate, Sharpe ratio tracking and comparison
+- **ELITE Signal Generator**: Intelligent signal generation with confidence scoring
+- **Model Registry**: Centralized model management and versioning
+- **Performance Analytics**: Model comparison, rankings, and historical analysis
 
 ### Index Trading Support
 - **NIFTY50, BankNifty, Sensex**: Full support for index and ETF tickers
@@ -166,6 +195,14 @@ Live trading is intentionally **not enabled by default**. If you want to integra
 - **Robust Error Handling**: Better error messages and retry logic
 - **Data Validation**: Check for gaps, outliers, and data quality issues
 - **Index Data Support**: Handle indices (which may have zero volume)
+
+### Web Dashboard
+- **Real-time Price Updates**: WebSocket-based live price streaming
+- **Order Management**: Place, modify, and cancel orders with visual feedback
+- **Portfolio Analytics**: Comprehensive analytics dashboard with charts and metrics
+- **Trading Mode Toggle**: Switch between paper and live trading with safety confirmations
+- **Watchlist Management**: Monitor multiple stocks simultaneously
+- **Trading Signals**: AI-generated buy/sell signals with probability scores
 
 ## Usage
 - Modify the strategies in the `src/strategies/` directory to implement your trading logic.

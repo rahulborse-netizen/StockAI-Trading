@@ -4,11 +4,25 @@ let currentTab = 'holdings';
 let holdingsData = [];
 let selectedStock = null;
 
+// Make setTheme available globally (defined in dashboard.js)
+// This ensures it's available when trading-platform.js loads
+if (typeof setTheme === 'undefined') {
+    // Fallback if dashboard.js hasn't loaded yet
+    window.setTheme = function(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    };
+}
+
 // Initialize platform
 document.addEventListener('DOMContentLoaded', function() {
     // Load saved theme
     const savedTheme = localStorage.getItem('theme') || 'dark';
-    setTheme(savedTheme);
+    if (typeof setTheme === 'function') {
+        setTheme(savedTheme);
+    } else {
+        window.setTheme(savedTheme);
+    }
     
     // Check Upstox connection status first
     checkUpstoxConnection();
@@ -25,12 +39,15 @@ document.addEventListener('DOMContentLoaded', function() {
         loadOrders();
     }, 500);
     
-    // Auto-refresh
+    // Auto-refresh - more frequent for indices
     setInterval(() => {
         loadMarketIndices();
+    }, 10000); // Refresh indices every 10 seconds
+    
+    setInterval(() => {
         loadHoldings();
         updatePrices();
-    }, 30000);
+    }, 30000); // Refresh holdings and prices every 30 seconds
     
     // Stock search
     document.getElementById('stock-search')?.addEventListener('input', function(e) {
@@ -67,27 +84,93 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// Load Market Indices
+// Load Market Indices - All major Indian indices
 async function loadMarketIndices() {
-    const indices = [
-        { id: 'nifty', ticker: '^NSEI', label: 'NIFTY' },
-        { id: 'sensex', ticker: '^BSESN', label: 'SENSEX' },
-        { id: 'banknifty', ticker: '^NSEBANK', label: 'BANKNIFTY' },
-        { id: 'vix', ticker: '^INDIAVIX', label: 'INDIA VIX' }
-    ];
-    
-    for (const index of indices) {
-        try {
-            const response = await fetch(`/api/prices`);
-            const prices = await response.json();
-            
-            if (prices[index.ticker] && !prices[index.ticker].error) {
-                const price = prices[index.ticker];
-                updateIndexDisplay(index.id, price.price, price.change, price.change_pct);
-            }
-        } catch (error) {
-            console.error(`Error loading ${index.label}:`, error);
+    try {
+        const response = await fetch('/api/market-indices');
+        if (!response.ok) {
+            throw new Error('Failed to fetch market indices');
         }
+        
+        const indices = await response.json();
+        
+        // Major indices (always visible in top bar)
+        const majorIndices = ['nifty', 'sensex', 'banknifty', 'vix'];
+        majorIndices.forEach(id => {
+            if (indices[id]) {
+                updateIndexDisplay(id, indices[id].value, indices[id].change, indices[id].change_pct);
+            } else {
+                const el = document.getElementById(`index-${id}`);
+                if (el) {
+                    const valueEl = el.querySelector('.index-value');
+                    const changeEl = el.querySelector('.index-change');
+                    if (valueEl) valueEl.textContent = '--';
+                    if (changeEl) changeEl.textContent = '--';
+                }
+            }
+        });
+        
+        // Sectoral indices (expandable section)
+        const sectoralIndices = ['niftyit', 'niftyfmcg', 'niftypharma', 'niftyauto', 'niftymetal', 
+                                 'niftyenergy', 'niftyrealty', 'niftypsu', 'niftymidcap', 'niftysmallcap'];
+        const sectoralLabels = {
+            'niftyit': 'NIFTY IT',
+            'niftyfmcg': 'NIFTY FMCG',
+            'niftypharma': 'NIFTY PHARMA',
+            'niftyauto': 'NIFTY AUTO',
+            'niftymetal': 'NIFTY METAL',
+            'niftyenergy': 'NIFTY ENERGY',
+            'niftyrealty': 'NIFTY REALTY',
+            'niftypsu': 'NIFTY PSU',
+            'niftymidcap': 'NIFTY MIDCAP',
+            'niftysmallcap': 'NIFTY SMALLCAP'
+        };
+        
+        // Render sectoral indices in expandable section
+        const sectoralContainer = document.getElementById('sectoral-indices-container');
+        if (sectoralContainer) {
+            const sectoralHtml = sectoralIndices.map(id => {
+                if (indices[id]) {
+                    const index = indices[id];
+                    const isPositive = index.change >= 0;
+                    return `
+                        <div class="index-item" style="min-width: 120px; font-size: 0.875rem;">
+                            <div class="index-label">${sectoralLabels[id] || id.toUpperCase()}</div>
+                            <div class="index-value">${index.value.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                            <div class="index-change ${isPositive ? 'positive' : 'negative'}">
+                                ${isPositive ? '+' : ''}${index.change.toFixed(2)} (${isPositive ? '+' : ''}${index.change_pct.toFixed(2)}%)
+                            </div>
+                        </div>
+                    `;
+                }
+                return '';
+            }).filter(html => html).join('');
+            
+            sectoralContainer.innerHTML = sectoralHtml || '<div class="text-muted" style="font-size: 0.75rem; padding: 0.5rem;">Sectoral indices loading...</div>';
+        }
+    } catch (error) {
+        console.error('Error loading market indices:', error);
+        // Show error on indices
+        ['nifty', 'sensex', 'banknifty', 'vix'].forEach(id => {
+            const el = document.getElementById(`index-${id}`);
+            if (el) {
+                const valueEl = el.querySelector('.index-value');
+                const changeEl = el.querySelector('.index-change');
+                if (valueEl) valueEl.textContent = '--';
+                if (changeEl) changeEl.textContent = '--';
+            }
+        });
+    }
+}
+
+// Toggle sectoral indices display
+function toggleSectoralIndices() {
+    const container = document.getElementById('sectoral-indices-container');
+    const icon = document.getElementById('indices-toggle-icon');
+    if (container && icon) {
+        const isVisible = container.style.display !== 'none';
+        container.style.display = isVisible ? 'none' : 'flex';
+        icon.className = isVisible ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
     }
 }
 
@@ -124,11 +207,15 @@ function updateIndexDisplay(id, value, change, changePct) {
     const valueEl = element.querySelector('.index-value');
     const changeEl = element.querySelector('.index-change');
     
-    if (valueEl) {
-        valueEl.textContent = value.toFixed(2);
+    if (valueEl && value && !isNaN(value)) {
+        // Format value with Indian number formatting
+        valueEl.textContent = value.toLocaleString('en-IN', { 
+            minimumFractionDigits: 2, 
+            maximumFractionDigits: 2 
+        });
     }
     
-    if (changeEl) {
+    if (changeEl && change !== undefined && !isNaN(change) && changePct !== undefined && !isNaN(changePct)) {
         const isPositive = change >= 0;
         changeEl.className = `index-change ${isPositive ? 'positive' : 'negative'}`;
         changeEl.textContent = `${isPositive ? '+' : ''}${change.toFixed(2)} (${isPositive ? '+' : ''}${changePct.toFixed(2)}%)`;
@@ -449,6 +536,29 @@ function selectStock(ticker) {
 }
 
 // Tab Switching
+// Phase 2.4: Record portfolio snapshot
+async function recordPortfolioSnapshot() {
+    try {
+        const response = await fetch('/api/portfolio/snapshot', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        
+        const result = await response.json();
+        if (result.status === 'success') {
+            showNotification('Portfolio snapshot recorded successfully', 'success');
+            // Reload charts
+            loadPortfolioValueChart();
+            loadDailyPnLChart();
+        } else {
+            showNotification(result.error || 'Failed to record snapshot', 'error');
+        }
+    } catch (error) {
+        console.error('Error recording snapshot:', error);
+        showNotification('Error recording snapshot: ' + error.message, 'error');
+    }
+}
+
 function switchTab(tabName) {
     currentTab = tabName;
     
@@ -483,17 +593,45 @@ function switchTab(tabName) {
     } else if (tabName === 'orders') {
         loadOrders();
     } else if (tabName === 'signals') {
+        // Auto-load signals when signals tab is opened
         loadSignals();
     } else if (tabName === 'trade-plans') {
         if (typeof loadTradePlans === 'function') {
             loadTradePlans();
         }
+    } else if (tabName === 'analytics') {
+        // Phase 2.4: Load analytics charts
+        setTimeout(() => {
+            if (typeof loadPortfolioValueChart === 'function') {
+                loadPortfolioValueChart();
+            }
+            if (typeof loadDailyPnLChart === 'function') {
+                loadDailyPnLChart();
+            }
+            if (typeof loadAllocationChart === 'function') {
+                loadAllocationChart();
+            }
+            if (typeof loadReturnsComparisonChart === 'function') {
+                loadReturnsComparisonChart();
+            }
+        }, 500);
     }
 }
 
 function filterHoldings(filter) {
     // Filter logic for holdings
     renderHoldingsTable();
+}
+
+// Toggle sectoral indices display
+function toggleSectoralIndices() {
+    const container = document.getElementById('sectoral-indices-container');
+    const icon = document.getElementById('indices-toggle-icon');
+    if (container && icon) {
+        const isVisible = container.style.display !== 'none';
+        container.style.display = isVisible ? 'none' : 'flex';
+        icon.className = isVisible ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
+    }
 }
 
 let currentPositionFilter = 'all';
@@ -549,32 +687,56 @@ async function loadPositions() {
         
         tbody.innerHTML = positions.map(pos => {
             // Handle both paper and real position formats
-            const pnl = pos.pnl || (paperMode ? pos.pnl : {});
-            const pnlValue = paperMode ? (pos.pnl || 0) : (pos.overall_pnl || pos.intraday_pnl || 0);
-            const pnlPct = paperMode ? (pos.pnl_pct || 0) : (pos.pnl_pct || 0);
+            const pnlValue = paperMode ? (pos.pnl || 0) : (pos.overall_pnl || pos.pnl || pos.intraday_pnl || 0);
+            const pnlPct = paperMode ? (pos.pnl_pct || 0) : (pos.pnl_pct || pos.overall_pnl_pct || 0);
             const pnlClass = pnlValue >= 0 ? 'positive' : 'negative';
             const symbol = pos.symbol || pos.tradingsymbol || 'N/A';
-            const quantity = pos.quantity || 0;
+            const quantity = pos.quantity || pos.net_quantity || 0;
+            const netQty = Math.abs(quantity);
+            const transactionType = pos.transaction_type || (quantity >= 0 ? 'BUY' : 'SELL');
+            const typeBadge = transactionType === 'BUY' 
+                ? '<span class="badge bg-success">BUY</span>' 
+                : '<span class="badge bg-danger">SELL</span>';
             const entryPrice = pos.entry_price || pos.average_price || 0;
-            const exitPrice = pos.exit_price || pos.last_price || entryPrice;
-            const entryTime = pos.entry_time ? new Date(pos.entry_time).toLocaleString() : 'N/A';
-            const exitTime = pos.exit_time ? new Date(pos.exit_time).toLocaleString() : '-';
-            const status = pos.status || 'OPEN';
-            const statusBadge = status === 'OPEN' ? '<span class="badge bg-success">Open</span>' : '<span class="badge bg-secondary">Closed</span>';
+            const currentPrice = pos.last_price || pos.current_price || pos.ltp || entryPrice;
+            const product = pos.product || 'MIS';
+            const productBadge = product === 'CNC' 
+                ? '<span class="badge bg-info">CNC</span>' 
+                : product === 'NRML' 
+                ? '<span class="badge bg-warning">NRML</span>' 
+                : '<span class="badge bg-secondary">MIS</span>';
+            
+            // Fix Bug 5: Add data attributes for real-time P&L updates
+            // Get instrument key for Upstox positions, use symbol as fallback
+            const instrumentKey = pos.instrument_key || pos.instrument_token || symbol;
             
             return `
-                <tr>
-                    <td class="symbol">${symbol}${paperMode ? ' <span class="badge bg-info">Paper</span>' : ''}</td>
-                    <td>${quantity}</td>
-                    <td>₹${entryPrice.toFixed(2)}</td>
-                    <td>${exitPrice ? '₹' + exitPrice.toFixed(2) : '-'}</td>
-                    <td>${entryTime}</td>
-                    <td>${exitTime}</td>
-                    <td class="${pnlClass}">₹${pnlValue >= 0 ? '+' : ''}${pnlValue.toFixed(2)}</td>
-                    <td class="${pnlClass}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</td>
-                    <td>${statusBadge}</td>
+                <tr onclick="selectStock('${symbol}')" 
+                    style="cursor: pointer;"
+                    data-instrument-key="${instrumentKey}"
+                    data-avg-price="${entryPrice}"
+                    data-quantity="${quantity}">
+                    <td class="symbol">
+                        <strong>${symbol}</strong>
+                        ${paperMode ? ' <span class="badge bg-info">Paper</span>' : ''}
+                    </td>
                     <td>
-                        <button class="btn-action btn-view" onclick="selectStock('${symbol}')">View</button>
+                        <div>${netQty}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">${typeBadge}</div>
+                    </td>
+                    <td>₹${entryPrice.toFixed(2)}</td>
+                    <td class="${currentPrice >= entryPrice ? 'positive' : 'negative'}">₹${currentPrice.toFixed(2)}</td>
+                    <td>₹${((netQty * currentPrice) || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td class="pnl-cell ${pnlClass}">₹${pnlValue >= 0 ? '+' : ''}${pnlValue.toFixed(2)}</td>
+                    <td class="${pnlClass}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</td>
+                    <td>${productBadge}</td>
+                    <td>
+                        <span class="badge bg-success">Open</span>
+                    </td>
+                    <td>
+                        <button class="btn-action btn-view" onclick="event.stopPropagation(); selectStock('${symbol}')" title="View Details">
+                            <i class="fas fa-eye"></i>
+                        </button>
                     </td>
                 </tr>
             `;
@@ -645,12 +807,222 @@ async function syncDailyPositions() {
     }
 }
 
-function loadSignals() {
-    // Load signals for all watchlist stocks
+// Popular stocks to show signals for by default
+const POPULAR_STOCKS = [
+    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'HINDUNILVR.NS',
+    'ICICIBANK.NS', 'BHARTIARTL.NS', 'SBIN.NS', 'BAJFINANCE.NS', 'LICI.NS',
+    'ITC.NS', 'LT.NS', 'HCLTECH.NS', 'AXISBANK.NS', 'MARUTI.NS'
+];
+
+async function loadSignals() {
     const container = document.getElementById('signals-container');
     if (!container) return;
     
-    container.innerHTML = '<div class="empty-state"><i class="fas fa-mouse-pointer"></i><p>Select a stock to view trading signals</p></div>';
+    // Show loading state
+    container.innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-3">Loading trading signals...</p></div>';
+    
+    try {
+        // First, try to get watchlist stocks
+        const watchlistResponse = await fetch('/api/watchlist');
+        const watchlist = await watchlistResponse.json();
+        
+        // Use watchlist if available, otherwise use popular stocks
+        const stocksToLoad = watchlist.length > 0 ? watchlist : POPULAR_STOCKS;
+        
+        // Limit to first 10 stocks for performance
+        const stocks = stocksToLoad.slice(0, 10);
+        
+        if (stocks.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-mouse-pointer"></i><p>No stocks available. Add stocks to watchlist or select a stock to view signals.</p></div>';
+            return;
+        }
+        
+        // Load signals for all stocks in parallel with retry logic
+        const signalPromises = stocks.map(async (ticker) => {
+            const maxRetries = 2;
+            let retryCount = 0;
+            
+            while (retryCount <= maxRetries) {
+                try {
+                    // URL encode ticker to handle special characters like ^
+                    const encodedTicker = encodeURIComponent(ticker);
+                    const response = await fetch(`/api/signals/${encodedTicker}`, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        signal: AbortSignal.timeout(30000) // 30 second timeout
+                    });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+                        console.warn(`Signal API returned ${response.status} for ${ticker}:`, errorData.error);
+                        
+                        // Retry on 500 errors (server errors)
+                        if (response.status >= 500 && retryCount < maxRetries) {
+                            retryCount++;
+                            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)); // Exponential backoff
+                            continue;
+                        }
+                        return null;
+                    }
+                    
+                    const signal = await response.json();
+                    if (signal.error) {
+                        console.warn(`Signal error for ${ticker}: ${signal.error}`);
+                        // Don't retry on client errors (400, 404)
+                        return null;
+                    }
+                    return { ticker, signal };
+                } catch (error) {
+                    console.error(`Error loading signal for ${ticker} (attempt ${retryCount + 1}/${maxRetries + 1}):`, error);
+                    
+                    // Retry on network errors
+                    if (retryCount < maxRetries && (error.name === 'TypeError' || error.name === 'NetworkError')) {
+                        retryCount++;
+                        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)); // Exponential backoff
+                        continue;
+                    }
+                    return null;
+                }
+            }
+            return null;
+        });
+        
+        const results = await Promise.all(signalPromises);
+        const validSignals = results.filter(r => r !== null);
+        
+        if (validSignals.length === 0) {
+            // Show more helpful error message with troubleshooting tips
+            container.innerHTML = `
+                <div class="empty-state" style="text-align: center; padding: 2rem;">
+                    <i class="fas fa-exclamation-triangle" style="font-size: 3rem; color: #f59e0b; margin-bottom: 1rem;"></i>
+                    <h4 style="margin-bottom: 0.5rem;">Unable to Load Trading Signals</h4>
+                    <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.5rem; max-width: 500px; margin-left: auto; margin-right: auto;">
+                        This might be due to:
+                        <br>• Network connectivity issues
+                        <br>• Market data temporarily unavailable
+                        <br>• Server processing delay
+                        <br>• Data source API rate limits
+                    </p>
+                    <div style="margin-top: 1.5rem;">
+                        <button class="btn-modern btn-primary" onclick="loadSignals()" style="margin-right: 0.5rem;">
+                            <i class="fas fa-sync-alt"></i> Retry Now
+                        </button>
+                        <button class="btn-modern btn-secondary" onclick="loadAllSignals()">
+                            <i class="fas fa-redo"></i> Refresh All
+                        </button>
+                    </div>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 1rem;">
+                        <i class="fas fa-info-circle"></i> Check browser console (F12) for detailed error messages
+                    </p>
+                </div>
+            `;
+            console.error('No signals loaded. Check network and server logs.');
+            return;
+        }
+        
+        // Render signals in a grid with enhanced display
+        container.innerHTML = `
+            <div class="signals-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                ${validSignals.map(({ ticker, signal }) => {
+                    const signalClass = signal.signal === 'BUY' ? 'success' : 
+                                     signal.signal === 'SELL' ? 'danger' : 'warning';
+                    const signalIcon = signal.signal === 'BUY' ? 'fa-arrow-up' : 
+                                     signal.signal === 'SELL' ? 'fa-arrow-down' : 'fa-pause';
+                    const probPercent = ((signal.probability || 0) * 100).toFixed(1);
+                    const confidenceClass = probPercent >= 70 ? 'success' : probPercent >= 50 ? 'warning' : 'secondary';
+                    
+                    // Calculate potential profit/loss
+                    const entryPrice = signal.entry_level || signal.current_price || 0;
+                    const stopLoss = signal.stop_loss || 0;
+                    const target1 = signal.target_1 || 0;
+                    const target2 = signal.target_2 || 0;
+                    
+                    const riskAmount = Math.abs(entryPrice - stopLoss);
+                    const reward1 = Math.abs(target1 - entryPrice);
+                    const reward2 = Math.abs(target2 - entryPrice);
+                    const riskReward1 = reward1 > 0 ? (reward1 / riskAmount).toFixed(2) : 'N/A';
+                    const riskReward2 = reward2 > 0 ? (reward2 / riskAmount).toFixed(2) : 'N/A';
+                    
+                    return `
+                        <div class="signal-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;" 
+                             onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)'" 
+                             onmouseout="this.style.transform=''; this.style.boxShadow=''" 
+                             onclick="showLevels('${ticker}')">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h6 style="margin: 0; font-weight: 700; font-size: 1.1rem;">${ticker.replace('.NS', '')}</h6>
+                                <span class="badge bg-${signalClass}" style="font-size: 0.875rem; padding: 0.5rem 0.75rem;">
+                                    <i class="fas ${signalIcon}"></i> ${signal.signal}
+                                </span>
+                            </div>
+                            
+                            <div class="mb-3" style="background: var(--bg-secondary); padding: 0.75rem; border-radius: 8px;">
+                                <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">Current Price</div>
+                                <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary);">₹${(signal.current_price || 0).toFixed(2)}</div>
+                            </div>
+                            
+                            <div class="row mb-3" style="margin: 0;">
+                                <div class="col-6" style="padding-right: 0.5rem;">
+                                    <div style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">Entry Level</div>
+                                    <div style="font-size: 0.95rem; font-weight: 600;">₹${entryPrice.toFixed(2)}</div>
+                                </div>
+                                <div class="col-6" style="padding-left: 0.5rem;">
+                                    <div style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">Stop Loss</div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ef4444;">₹${stopLoss.toFixed(2)}</div>
+                                </div>
+                            </div>
+                            
+                            <div class="row mb-3" style="margin: 0;">
+                                <div class="col-6" style="padding-right: 0.5rem;">
+                                    <div style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">Target 1</div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #10b981;">₹${target1.toFixed(2)}</div>
+                                </div>
+                                <div class="col-6" style="padding-left: 0.5rem;">
+                                    <div style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">Target 2</div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #10b981;">₹${target2.toFixed(2)}</div>
+                                </div>
+                            </div>
+                            
+                            <div style="border-top: 1px solid var(--border-color); padding-top: 0.75rem; margin-top: 0.75rem;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <div style="font-size: 0.7rem; color: var(--text-muted);">Confidence</div>
+                                        <div style="font-size: 0.95rem; font-weight: 600;">
+                                            <span class="badge bg-${confidenceClass}">${probPercent}%</span>
+                                        </div>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        <div style="font-size: 0.7rem; color: var(--text-muted);">Risk:Reward</div>
+                                        <div style="font-size: 0.85rem; font-weight: 500;">1:${riskReward1}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            ${signal.source ? `<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.5rem; text-align: right;">Source: ${signal.source}</div>` : ''}
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    } catch (error) {
+        console.error('Error loading signals:', error);
+        container.innerHTML = `
+            <div class="empty-state" style="text-align: center; padding: 2rem;">
+                <i class="fas fa-exclamation-circle" style="font-size: 3rem; color: #ef4444; margin-bottom: 1rem;"></i>
+                <h4 style="margin-bottom: 0.5rem;">Error Loading Signals</h4>
+                <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.5rem;">
+                    ${error.message || 'An unexpected error occurred while loading trading signals.'}
+                </p>
+                <button class="btn-modern btn-primary mt-3" onclick="loadSignals()">
+                    <i class="fas fa-sync-alt"></i> Try Again
+                </button>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 1rem;">
+                    Error details: ${error.name || 'Unknown error'}
+                </p>
+            </div>
+        `;
+    }
 }
 
 function refreshHoldings() {
@@ -737,10 +1109,16 @@ async function showIndexSignals() {
 
 // Load all signals for holdings
 async function loadAllSignals() {
-    showNotification('Loading signals for all holdings...', 'info');
+    showNotification('Loading signals for all stocks...', 'info');
     
-    // Reload holdings to refresh signals
-    await loadHoldings();
+    // Load signals in the signals tab
+    await loadSignals();
+    
+    // Also reload holdings to refresh signals in holdings table
+    if (typeof loadHoldings === 'function') {
+        await loadHoldings();
+    }
+    
     showNotification('Signals refreshed!', 'success');
 }
 

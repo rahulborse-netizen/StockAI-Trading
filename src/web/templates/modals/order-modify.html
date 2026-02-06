@@ -1,0 +1,54 @@
+<!-- Order Modify Modal Template -->
+<!-- This modal is included in dashboard.html -->
+<div class="modal fade" id="orderModifyModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content-modern">
+            <div class="modal-header-modern">
+                <div class="modal-title-section">
+                    <i class="fas fa-edit modal-icon"></i>
+                    <h5>Modify Order</h5>
+                </div>
+                <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body-modern">
+                <form id="order-modify-form">
+                    <input type="hidden" id="modify-order-id">
+                    <div class="form-group-modern">
+                        <label class="form-label-modern">
+                            <i class="fas fa-tag"></i> Symbol
+                        </label>
+                        <input type="text" class="input-modern" id="modify-symbol" readonly>
+                    </div>
+                    <div class="form-group-modern">
+                        <label class="form-label-modern">
+                            <i class="fas fa-sort-numeric-up"></i> Quantity
+                        </label>
+                        <input type="number" class="input-modern" id="modify-quantity" min="1" required>
+                    </div>
+                    <div class="form-group-modern">
+                        <label class="form-label-modern">
+                            <i class="fas fa-list"></i> Order Type
+                        </label>
+                        <select class="input-modern" id="modify-order-type">
+                            <option value="MARKET">Market</option>
+                            <option value="LIMIT">Limit</option>
+                            <option value="SL">Stop Loss</option>
+                        </select>
+                    </div>
+                    <div class="form-group-modern" id="modify-price-container">
+                        <label class="form-label-modern">
+                            <i class="fas fa-rupee-sign"></i> Price
+                        </label>
+                        <input type="number" class="input-modern" id="modify-price" step="0.01">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer-modern">
+                <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn-modern btn-primary" onclick="submitOrderModification()">
+                    <i class="fas fa-check"></i> Modify Order
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

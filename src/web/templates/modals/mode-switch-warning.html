@@ -1,0 +1,46 @@
+<!-- Trading Mode Switch Warning Modal Template -->
+<!-- This modal is included in dashboard.html -->
+<div class="modal fade" id="modeSwitchModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content-modern">
+            <div class="modal-header-modern" style="background: #ef4444; color: white;">
+                <div class="modal-title-section">
+                    <i class="fas fa-exclamation-triangle modal-icon"></i>
+                    <h5>⚠️ SWITCH TO LIVE TRADING?</h5>
+                </div>
+                <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body-modern">
+                <div class="warning-content">
+                    <p style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem;">
+                        You are about to enable <strong style="color: #ef4444;">LIVE TRADING</strong> with <strong style="color: #ef4444;">REAL MONEY</strong>.
+                    </p>
+                    <p>All orders will execute on the exchange and use real funds from your account.</p>
+                    
+                    <div class="warning-list">
+                        <h6>Important:</h6>
+                        <ul>
+                            <li>Orders will execute with real money</li>
+                            <li>You will be charged brokerage and taxes</li>
+                            <li>Losses will affect your actual account balance</li>
+                            <li>Make sure you understand the risks</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="confirmation-input">
+                        <label>
+                            Type <strong>"CONFIRM"</strong> to enable live trading:
+                        </label>
+                        <input type="text" class="input-modern" id="mode-confirm-input" placeholder="Type CONFIRM here">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer-modern">
+                <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn-modern btn-danger" id="confirm-mode-switch-btn" onclick="confirmModeSwitch()" disabled>
+                    I UNDERSTAND - ENABLE LIVE TRADING
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
