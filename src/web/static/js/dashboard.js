@@ -1,14 +1,40 @@
 // Modern Dashboard JavaScript with Enhanced Interactivity
+// Phase 2.1: Real-time WebSocket updates
 
 let priceUpdateInterval = null;
 let selectedTicker = null;
 let currentTheme = 'dark';
+let marketDataWS = null;
+let lastPrices = {}; // Store last prices for change detection
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', function() {
     // Load saved theme
     const savedTheme = localStorage.getItem('theme') || 'dark';
     setTheme(savedTheme);
+    
+    // Phase 2.1: Initialize WebSocket client
+    if (window.marketDataWS) {
+        marketDataWS = window.marketDataWS;
+        
+        // Connect to WebSocket server
+        marketDataWS.connect();
+        
+        // Monitor connection status
+        marketDataWS.onConnectionChange((status, error) => {
+            updateWebSocketStatus(status, error);
+        });
+        
+        // Listen for global price updates
+        window.addEventListener('priceUpdate', (event) => {
+            handleRealtimePriceUpdate(event.detail.instrument_key, event.detail.priceData);
+        });
+        
+        // Start WebSocket stream when watchlist is loaded
+        setTimeout(() => {
+            startWebSocketStream();
+        }, 2000);
+    }
     
     // Initialize components
     loadWatchlist();
@@ -17,10 +43,12 @@ document.addEventListener('DOMContentLoaded', function() {
     loadOrders();
     updateStats();
     
-    // Auto-refresh prices every 30 seconds
+    // Fallback: Auto-refresh prices every 30 seconds if WebSocket fails
     priceUpdateInterval = setInterval(() => {
-        updatePrices();
-        updateStats();
+        if (!marketDataWS || !marketDataWS.isConnected()) {
+            updatePrices();
+            updateStats();
+        }
     }, 30000);
     
     // Show price input when order type changes
@@ -39,7 +67,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// Theme Toggle
+// Theme Toggle - Make functions globally available
 function toggleTheme() {
     currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
     setTheme(currentTheme);
@@ -53,6 +81,10 @@ function setTheme(theme) {
         themeIcon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
     }
 }
+
+// Make functions globally available
+window.setTheme = setTheme;
+window.toggleTheme = toggleTheme;
 
 // Update Stats
 async function updateStats() {
@@ -133,6 +165,11 @@ async function loadWatchlist() {
         
         // Load prices for watchlist
         updatePrices();
+        
+        // Phase 2.1: Subscribe to WebSocket updates for new watchlist items
+        if (marketDataWS && marketDataWS.isConnected()) {
+            marketDataWS.subscribe(watchlist);
+        }
     } catch (error) {
         console.error('Error loading watchlist:', error);
     }
@@ -216,47 +253,159 @@ async function removeFromWatchlist(ticker) {
     }
 }
 
-// Update prices with modern display
+// Phase 2.1: Start WebSocket stream for watchlist
+async function startWebSocketStream() {
+    try {
+        const response = await fetch('/api/watchlist');
+        const watchlist = await response.json();
+        
+        if (watchlist.length > 0 && marketDataWS && marketDataWS.isConnected()) {
+            // Subscribe to watchlist tickers via WebSocket
+            marketDataWS.subscribe(watchlist);
+            
+            // Also start stream on server side
+            await fetch('/api/market/start_stream', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({tickers: watchlist})
+            });
+        }
+    } catch (error) {
+        console.error('Error starting WebSocket stream:', error);
+    }
+}
+
+// Phase 2.1: Handle real-time price updates from WebSocket
+function handleRealtimePriceUpdate(instrumentKey, priceData) {
+    try {
+        // Map instrument key to ticker (simplified - you may need instrument master)
+        // For now, update all watchlist items and match by instrument key
+        
+        // Update display with real-time data
+        const formattedData = {
+            price: priceData.ltp || 0,
+            open: priceData.open || 0,
+            high: priceData.high || 0,
+            low: priceData.low || 0,
+            close: priceData.close || 0,
+            volume: priceData.volume || 0,
+            change: (priceData.ltp - priceData.close) || 0,
+            change_pct: priceData.close > 0 ? ((priceData.ltp - priceData.close) / priceData.close * 100) : 0
+        };
+        
+        // Store instrument key mapping (you may need to enhance this)
+        // For now, try to match against watchlist items
+        const watchlistItems = document.querySelectorAll('.watchlist-item');
+        watchlistItems.forEach(item => {
+            const ticker = item.getAttribute('data-ticker');
+            const itemInstrumentKey = item.getAttribute('data-instrument-key');
+            
+            if (itemInstrumentKey === instrumentKey) {
+                updatePriceDisplay(ticker, formattedData, true);
+            }
+        });
+        
+        // Update positions P&L if affected
+        updatePositionsPnL(instrumentKey, priceData.ltp);
+        
+    } catch (error) {
+        console.error('Error handling real-time price update:', error);
+    }
+}
+
+// Phase 2.1: Update WebSocket connection status indicator
+function updateWebSocketStatus(status, error = null) {
+    const statusEl = document.getElementById('ws-connection-status');
+    if (!statusEl) return;
+    
+    const statusMessages = {
+        'connected': '🟢 Live',
+        'disconnected': '🔴 Offline',
+        'error': '🟠 Error'
+    };
+    
+    statusEl.innerHTML = statusMessages[status] || '⚫ Unknown';
+    
+    if (status === 'connected') {
+        statusEl.style.color = 'var(--success-color)';
+    } else if (status === 'error') {
+        statusEl.style.color = 'var(--warning-color)';
+        if (error) {
+            console.error('WebSocket error:', error);
+        }
+    } else {
+        statusEl.style.color = 'var(--danger-color)';
+    }
+}
+
+// Phase 2.1: Update price display with animation
+function updatePriceDisplay(ticker, priceData, isRealtime = false) {
+    const priceInfo = document.getElementById(`price-${ticker}`);
+    if (!priceInfo) return;
+    
+    if (priceData.error) {
+        const errorMsg = priceData.error.length > 60 
+            ? priceData.error.substring(0, 60) + '...' 
+            : priceData.error;
+        priceInfo.innerHTML = `
+            <div class="price-value" style="color: var(--text-muted); font-size: 1.25rem;">N/A</div>
+            <div class="price-change" style="color: var(--danger-color); font-size: 0.75rem; margin-top: 0.5rem;">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span style="display: block; margin-top: 0.25rem;">${errorMsg}</span>
+            </div>
+        `;
+        return;
+    }
+    
+    const price = priceData.price || priceData.ltp || 0;
+    const change = priceData.change || 0;
+    const changePct = priceData.change_pct || 0;
+    const volume = priceData.volume || 0;
+    
+    // Detect price change for animation
+    const lastPrice = lastPrices[ticker];
+    let flashClass = '';
+    if (lastPrice && isRealtime) {
+        if (price > lastPrice.price) {
+            flashClass = 'price-flash-up';
+        } else if (price < lastPrice.price) {
+            flashClass = 'price-flash-down';
+        }
+    }
+    lastPrices[ticker] = {price, change, changePct};
+    
+    const changeClass = change >= 0 ? 'price-up' : 'price-down';
+    const changeIcon = change >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
+    
+    priceInfo.innerHTML = `
+        <div class="price-value ${flashClass}">₹${price.toFixed(2)}</div>
+        <div class="price-change ${changeClass}">
+            <i class="fas ${changeIcon}"></i>
+            <span>${change >= 0 ? '+' : ''}${change.toFixed(2)} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%)</span>
+        </div>
+        <small class="text-muted">Vol: ${volume.toLocaleString()}</small>
+        ${isRealtime ? '<small class="text-success" style="font-size: 0.65rem;"><i class="fas fa-circle"></i> Live</small>' : ''}
+    `;
+    
+    // Remove flash class after animation
+    if (flashClass) {
+        setTimeout(() => {
+            const priceValue = priceInfo.querySelector('.price-value');
+            if (priceValue) {
+                priceValue.classList.remove(flashClass);
+            }
+        }, 500);
+    }
+}
+
+// Update prices with modern display (fallback for non-WebSocket)
 async function updatePrices() {
     try {
         const response = await fetch('/api/prices');
         const prices = await response.json();
         
         Object.keys(prices).forEach(ticker => {
-            const priceInfo = document.getElementById(`price-${ticker}`);
-            if (!priceInfo) return;
-            
-            if (prices[ticker].error) {
-                const errorMsg = prices[ticker].error.length > 60 
-                    ? prices[ticker].error.substring(0, 60) + '...' 
-                    : prices[ticker].error;
-                priceInfo.innerHTML = `
-                    <div class="price-value" style="color: var(--text-muted); font-size: 1.25rem;">N/A</div>
-                    <div class="price-change" style="color: var(--danger-color); font-size: 0.75rem; margin-top: 0.5rem;">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <span style="display: block; margin-top: 0.25rem;">${errorMsg}</span>
-                    </div>
-                `;
-                return;
-            }
-            
-            // Show warning if using cached data
-            if (prices[ticker].warning) {
-                console.warn(`${ticker}: ${prices[ticker].warning}`);
-            }
-            
-            const price = prices[ticker];
-            const changeClass = price.change >= 0 ? 'price-up' : 'price-down';
-            const changeIcon = price.change >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
-            
-            priceInfo.innerHTML = `
-                <div class="price-value">₹${price.price.toFixed(2)}</div>
-                <div class="price-change ${changeClass}">
-                    <i class="fas ${changeIcon}"></i>
-                    <span>${price.change >= 0 ? '+' : ''}${price.change.toFixed(2)} (${price.change_pct >= 0 ? '+' : ''}${price.change_pct.toFixed(2)}%)</span>
-                </div>
-                <small class="text-muted">Vol: ${price.volume.toLocaleString()}</small>
-            `;
+            updatePriceDisplay(ticker, prices[ticker], false);
         });
     } catch (error) {
         console.error('Error updating prices:', error);
@@ -945,40 +1094,271 @@ async function testUpstoxConnection() {
 }
 
 // Load orders
+// Phase 2.2: Enhanced order loading with status indicators and actions
 async function loadOrders() {
     try {
         const response = await fetch('/api/upstox/orders');
         const orders = await response.json();
-        const container = document.getElementById('orders-container');
+        const tbody = document.getElementById('orders-table-body');
+        
+        if (!tbody) {
+            console.error('Orders table body not found');
+            return;
+        }
         
         if (orders.error) {
-            container.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>${orders.error}</p></div>`;
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">${orders.error}</td></tr>`;
             return;
         }
         
-        if (orders.length === 0) {
-            container.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>No orders found</p></div>';
+        if (!orders || orders.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No orders found</td></tr>';
             return;
         }
         
-        let html = '<div class="orders-list">';
+        let html = '';
         orders.forEach(order => {
+            const orderId = order.order_id || order.orderId || order.instrument_token || 'N/A';
+            const symbol = order.tradingsymbol || order.symbol || order.instrument_token || 'N/A';
+            const type = order.transaction_type || order.type || 'N/A';
+            const qty = order.quantity || order.qty || 0;
+            const price = order.price || order.limit_price || order.trigger_price || '-';
+            const status = order.status || 'PENDING';
+            const timestamp = order.order_timestamp || order.timestamp || '-';
+            
+            // Phase 2.2: Status indicator class
+            const statusClass = getOrderStatusClass(status);
+            const statusText = getOrderStatusText(status);
+            
+            // Phase 2.2: Action buttons (only for pending orders)
+            const canModify = status === 'PENDING' || status === 'OPEN' || status === 'TRANSIT';
+            const canCancel = canModify;
+            
             html += `
-                <div class="order-item fade-in">
-                    <div>
-                        <strong>${order.instrument_token || 'N/A'}</strong>
-                        <div class="text-muted" style="font-size: 0.875rem;">
-                            ${order.transaction_type || 'N/A'} • Qty: ${order.quantity || 'N/A'}
+                <tr class="fade-in">
+                    <td>${orderId}</td>
+                    <td>${symbol}</td>
+                    <td>${type}</td>
+                    <td>${qty}</td>
+                    <td>${price === '-' ? '-' : '₹' + parseFloat(price).toFixed(2)}</td>
+                    <td><span class="order-status ${statusClass}">${statusText}</span></td>
+                    <td>${formatTimestamp(timestamp)}</td>
+                    <td>
+                        <div class="order-actions">
+                            ${canModify ? `<button class="btn-modern btn-icon-sm btn-primary" onclick="showModifyOrderModal('${orderId}')" title="Modify">
+                                <i class="fas fa-edit"></i>
+                            </button>` : ''}
+                            ${canCancel ? `<button class="btn-modern btn-icon-sm btn-danger" onclick="cancelOrder('${orderId}')" title="Cancel">
+                                <i class="fas fa-times"></i>
+                            </button>` : ''}
+                            <button class="btn-modern btn-icon-sm btn-secondary" onclick="viewOrderDetails('${orderId}')" title="View Details">
+                                <i class="fas fa-eye"></i>
+                            </button>
                         </div>
-                    </div>
-                    <span class="badge bg-${order.status === 'COMPLETE' ? 'success' : 'warning'}">${order.status || 'N/A'}</span>
-                </div>
+                    </td>
+                </tr>
             `;
         });
-        html += '</div>';
-        container.innerHTML = html;
+        tbody.innerHTML = html;
     } catch (error) {
         console.error('Error loading orders:', error);
+        const tbody = document.getElementById('orders-table-body');
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Error loading orders: ${error.message}</td></tr>`;
+        }
+    }
+}
+
+// Phase 2.2: Get order status CSS class
+function getOrderStatusClass(status) {
+    const statusUpper = (status || '').toUpperCase();
+    if (statusUpper === 'COMPLETE' || statusUpper === 'EXECUTED' || statusUpper === 'FILLED') {
+        return 'executed';
+    } else if (statusUpper === 'CANCELLED' || statusUpper === 'CANCELED') {
+        return 'cancelled';
+    } else if (statusUpper === 'REJECTED' || statusUpper === 'FAILED') {
+        return 'rejected';
+    } else {
+        return 'pending';
+    }
+}
+
+// Phase 2.2: Get order status display text
+function getOrderStatusText(status) {
+    const statusUpper = (status || '').toUpperCase();
+    if (statusUpper === 'COMPLETE' || statusUpper === 'EXECUTED' || statusUpper === 'FILLED') {
+        return 'EXECUTED';
+    } else if (statusUpper === 'CANCELLED' || statusUpper === 'CANCELED') {
+        return 'CANCELLED';
+    } else if (statusUpper === 'REJECTED' || statusUpper === 'FAILED') {
+        return 'REJECTED';
+    } else {
+        return 'PENDING';
+    }
+}
+
+// Phase 2.2: Format timestamp
+function formatTimestamp(timestamp) {
+    if (!timestamp || timestamp === '-') return '-';
+    try {
+        const date = new Date(timestamp);
+        return date.toLocaleString('en-IN', { 
+            day: '2-digit', 
+            month: '2-digit', 
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (e) {
+        return timestamp;
+    }
+}
+
+// Phase 2.2: Show modify order modal
+function showModifyOrderModal(orderId) {
+    // Fetch order details first
+    fetch(`/api/orders/${orderId}`)
+        .then(response => response.json())
+        .then(order => {
+            if (order.error) {
+                showNotification(order.error, 'error');
+                return;
+            }
+            
+            // Populate modal
+            document.getElementById('modify-order-id').value = orderId;
+            document.getElementById('modify-symbol').value = order.tradingsymbol || order.symbol || '';
+            document.getElementById('modify-quantity').value = order.quantity || order.qty || '';
+            document.getElementById('modify-order-type').value = order.order_type || order.orderType || 'MARKET';
+            document.getElementById('modify-price').value = order.price || order.limit_price || '';
+            
+            // Show/hide price input based on order type
+            const orderType = document.getElementById('modify-order-type').value;
+            const priceContainer = document.getElementById('modify-price-container');
+            if (orderType === 'MARKET') {
+                priceContainer.style.display = 'none';
+            } else {
+                priceContainer.style.display = 'block';
+            }
+            
+            // Show modal
+            const modalElement = document.getElementById('orderModifyModal');
+            const modal = new bootstrap.Modal(modalElement, {
+                backdrop: true,
+                keyboard: true,
+                focus: true
+            });
+            modal.show();
+        })
+        .catch(error => {
+            console.error('Error fetching order details:', error);
+            showNotification('Error loading order details', 'error');
+        });
+    
+    // Handle order type change
+    document.getElementById('modify-order-type').addEventListener('change', function() {
+        const priceContainer = document.getElementById('modify-price-container');
+        if (this.value === 'MARKET') {
+            priceContainer.style.display = 'none';
+        } else {
+            priceContainer.style.display = 'block';
+        }
+    });
+}
+
+// Phase 2.2: Submit order modification
+async function submitOrderModification() {
+    const orderId = document.getElementById('modify-order-id').value;
+    const quantity = parseInt(document.getElementById('modify-quantity').value);
+    const orderType = document.getElementById('modify-order-type').value;
+    const price = document.getElementById('modify-price').value ? parseFloat(document.getElementById('modify-price').value) : null;
+    
+    if (!orderId || !quantity) {
+        showNotification('Please fill all required fields', 'warning');
+        return;
+    }
+    
+    if ((orderType === 'LIMIT' || orderType === 'SL') && !price) {
+        showNotification('Price is required for LIMIT and SL orders', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/orders/${orderId}/modify`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                quantity: quantity,
+                order_type: orderType,
+                price: price
+            })
+        });
+        
+        const result = await response.json();
+        if (result.status === 'success') {
+            bootstrap.Modal.getInstance(document.getElementById('orderModifyModal')).hide();
+            showNotification('Order modified successfully', 'success');
+            loadOrders();
+        } else {
+            showNotification(result.error || 'Failed to modify order', 'error');
+        }
+    } catch (error) {
+        console.error('Error modifying order:', error);
+        showNotification('Error modifying order: ' + error.message, 'error');
+    }
+}
+
+// Phase 2.2: Cancel order
+async function cancelOrder(orderId) {
+    if (!confirm('Are you sure you want to cancel this order?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/orders/${orderId}/cancel`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        
+        const result = await response.json();
+        if (result.status === 'success') {
+            showNotification('Order cancelled successfully', 'success');
+            loadOrders();
+        } else {
+            showNotification(result.error || 'Failed to cancel order', 'error');
+        }
+    } catch (error) {
+        console.error('Error cancelling order:', error);
+        showNotification('Error cancelling order: ' + error.message, 'error');
+    }
+}
+
+// Phase 2.2: View order details
+async function viewOrderDetails(orderId) {
+    try {
+        const response = await fetch(`/api/orders/${orderId}`);
+        const order = await response.json();
+        
+        if (order.error) {
+            showNotification(order.error, 'error');
+            return;
+        }
+        
+        // Show order details in a modal or alert
+        const details = `
+Order ID: ${order.order_id || orderId}
+Symbol: ${order.tradingsymbol || order.symbol || 'N/A'}
+Type: ${order.transaction_type || order.type || 'N/A'}
+Quantity: ${order.quantity || order.qty || 'N/A'}
+Price: ${order.price || order.limit_price || 'N/A'}
+Status: ${order.status || 'N/A'}
+Timestamp: ${order.order_timestamp || order.timestamp || 'N/A'}
+        `;
+        
+        alert(details);
+    } catch (error) {
+        console.error('Error fetching order details:', error);
+        showNotification('Error loading order details', 'error');
     }
 }
 
@@ -1010,6 +1390,7 @@ function showPlaceOrderModal() {
 }
 
 // Place order
+// Phase 2.2: Place order with confirmation
 async function placeOrder() {
     const ticker = document.getElementById('order-ticker').value;
     const transactionType = document.getElementById('order-type').value;
@@ -1022,56 +1403,104 @@ async function placeOrder() {
         return;
     }
     
+    // Get current price for cost estimation
+    let currentPrice = price;
+    if (!currentPrice) {
+        try {
+            const priceResponse = await fetch(`/api/prices`);
+            const prices = await priceResponse.json();
+            if (prices[ticker] && prices[ticker].price) {
+                currentPrice = prices[ticker].price;
+            } else {
+                // Ticker not found in prices response - use fallback
+                currentPrice = price || 100;
+            }
+        } catch (e) {
+            // Use price from input or default
+            currentPrice = price || 100;
+        }
+    }
+    
+    // Ensure currentPrice is a valid number
+    if (isNaN(currentPrice) || currentPrice <= 0) {
+        currentPrice = price || 100;
+    }
+    
+    const estimatedCost = currentPrice * quantity;
+    const estimatedCharges = estimatedCost * 0.001; // 0.1% brokerage estimate
+    
+    // Check paper trading mode
+    let paperMode = false;
     try {
-        // Check paper trading mode before placing order
         const statusResponse = await fetch('/api/paper-trading/status');
         const statusData = await statusResponse.json();
-        const paperMode = statusData.paper_trading_mode;
-        
-        if (!paperMode) {
-            // Double confirmation for live trading
-            if (!confirm('⚠️ LIVE TRADING MODE\n\nThis will place a REAL order with REAL money.\n\nAre you sure you want to proceed?')) {
-                return;
-            }
-        }
-        
-        const response = await fetch('/api/upstox/place_order', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ticker, transaction_type: transactionType, quantity, order_type: orderType, price})
-        });
-        
-        const result = await response.json();
-        if (result.status === 'success') {
-            bootstrap.Modal.getInstance(document.getElementById('orderModal')).hide();
-            document.getElementById('order-form').reset();
-            loadOrders();
-            loadHoldings(); // Refresh holdings after order
-            if (result.paper_trading) {
-                showNotification(result.message || 'Paper order executed!', 'info');
-                // Show portfolio summary
-                if (result.portfolio) {
-                    const portfolio = result.portfolio;
-                    setTimeout(() => {
-                        showNotification(
-                            `Paper Portfolio: Cash: ₹${portfolio.cash_balance.toFixed(2)} | Positions: ₹${portfolio.position_value.toFixed(2)} | Total: ₹${portfolio.total_value.toFixed(2)} | P&L: ${portfolio.total_pnl_pct >= 0 ? '+' : ''}${portfolio.total_pnl_pct.toFixed(2)}%`,
-                            'info'
-                        );
-                    }, 1000);
+        paperMode = statusData.paper_trading_mode;
+    } catch (e) {
+        // Default to false if check fails
+    }
+    
+    // Prepare order details for confirmation
+    const orderDetails = {
+        ticker,
+        transaction_type: transactionType,
+        quantity,
+        order_type: orderType,
+        price: currentPrice,
+        estimated_cost: estimatedCost,
+        estimated_charges: estimatedCharges,
+        risk_warning: paperMode ? null : '⚠️ LIVE TRADING MODE: This order will execute with REAL MONEY.'
+    };
+    
+    // Show confirmation dialog
+    const onConfirm = async () => {
+        try {
+            const response = await fetch('/api/upstox/place_order', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ticker, transaction_type: transactionType, quantity, order_type: orderType, price})
+            });
+            
+            const result = await response.json();
+            if (result.status === 'success') {
+                bootstrap.Modal.getInstance(document.getElementById('orderModal')).hide();
+                document.getElementById('order-form').reset();
+                loadOrders();
+                loadHoldings(); // Refresh holdings after order
+                if (result.paper_trading) {
+                    showNotification(result.message || 'Paper order executed!', 'info');
+                    // Show portfolio summary
+                    if (result.portfolio) {
+                        const portfolio = result.portfolio;
+                        setTimeout(() => {
+                            showNotification(
+                                `Paper Portfolio: Cash: ₹${portfolio.cash_balance.toFixed(2)} | Positions: ₹${portfolio.position_value.toFixed(2)} | Total: ₹${portfolio.total_value.toFixed(2)} | P&L: ${portfolio.total_pnl_pct >= 0 ? '+' : ''}${portfolio.total_pnl_pct.toFixed(2)}%`,
+                                'info'
+                            );
+                        }, 1000);
+                    }
+                } else {
+                    showNotification(result.message || '✅ LIVE ORDER PLACED SUCCESSFULLY!', 'success');
                 }
             } else {
-                showNotification(result.message || '✅ LIVE ORDER PLACED SUCCESSFULLY!', 'success');
+                showNotification(result.error || 'Failed to place order', 'error');
             }
-        } else {
-            const errorMsg = result.error || result.message || 'Error placing order';
-            showNotification(`⚠️ ${errorMsg}`, 'error');
-            if (result.hint) {
-                setTimeout(() => showNotification(`💡 ${result.hint}`, 'info'), 2000);
-            }
+        } catch (error) {
+            console.error('Error placing order:', error);
+            showNotification('Error placing order: ' + error.message, 'error');
         }
-    } catch (error) {
-        console.error('Error placing order:', error);
-        showNotification('Error placing order', 'error');
+    };
+    
+    // Use two-step confirmation for market orders
+    if (orderType === 'MARKET' && typeof orderConfirmation !== 'undefined') {
+        orderConfirmation.showTwoStepConfirmation(orderDetails, onConfirm);
+    } else if (typeof orderConfirmation !== 'undefined') {
+        orderConfirmation.showConfirmation(orderDetails, onConfirm);
+    } else {
+        // Fallback to simple confirmation
+        if (!paperMode && !confirm('⚠️ LIVE TRADING MODE\n\nThis will place a REAL order with REAL money.\n\nAre you sure you want to proceed?')) {
+            return;
+        }
+        onConfirm();
     }
 }
 
@@ -1082,7 +1511,7 @@ function refreshSignals() {
     }
 }
 
-// Notification system
+// Notification system - Make globally available
 function showNotification(message, type = 'info') {
     // Create notification element
     const notification = document.createElement('div');
@@ -1108,5 +1537,45 @@ function showNotification(message, type = 'info') {
         notification.style.opacity = '0';
         notification.style.transform = 'translateX(100%)';
         setTimeout(() => notification.remove(), 300);
-    }, 3000);
+        }, 3000);
+}
+
+// Make functions globally available for other scripts
+window.showNotification = showNotification;
+window.showUpstoxModal = showUpstoxModal;
+window.setTheme = setTheme;
+window.toggleTheme = toggleTheme;
+
+// Phase 2.3: Update positions P&L with real-time prices (placeholder - will be implemented in position-pnl task)
+function updatePositionsPnL(instrumentKey, currentPrice) {
+    // TODO: Implement real-time P&L calculation
+    // This will be properly implemented in the position P&L calculator module
+    try {
+        const positionsTable = document.querySelector('#positions-table tbody');
+        if (!positionsTable) return;
+        
+        const rows = positionsTable.querySelectorAll('tr');
+        rows.forEach(row => {
+            const rowInstrumentKey = row.getAttribute('data-instrument-key');
+            if (rowInstrumentKey === instrumentKey) {
+                const avgPrice = parseFloat(row.getAttribute('data-avg-price') || 0);
+                const quantity = parseFloat(row.getAttribute('data-quantity') || 0);
+                
+                // Fix Bug 2: Include short positions (negative quantities) in P&L updates
+                if (avgPrice > 0 && quantity != 0) {
+                    const pnl = (currentPrice - avgPrice) * quantity;
+                    const pnlPct = ((currentPrice - avgPrice) / avgPrice) * 100;
+                    
+                    const pnlCell = row.querySelector('.pnl-cell');
+                    if (pnlCell) {
+                        const pnlClass = pnl >= 0 ? 'text-success' : 'text-danger';
+                        pnlCell.className = `pnl-cell ${pnlClass}`;
+                        pnlCell.textContent = `₹${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`;
+                    }
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error updating positions P&L:', error);
+    }
 }

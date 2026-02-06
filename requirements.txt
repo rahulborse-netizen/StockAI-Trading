@@ -6,6 +6,10 @@ seaborn
 requests
 flask
 flask-cors
+flask-socketio==5.3.5
+python-socketio==5.10.0
+eventlet==0.33.3
+websocket-client==1.6.4
 python-dotenv
 kiteconnect
 backtrader
@@ -13,3 +17,6 @@ jupyter
 pytest
 yfinance
 joblib
+# ELITE AI System dependencies
+xgboost>=2.0.0
+tensorflow>=2.13.0

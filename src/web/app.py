@@ -28,17 +28,44 @@ from src.web.watchlist import WatchlistManager
 from src.web.alerts import AlertManager
 from src.web.instrument_master import InstrumentMaster
 from src.web.market_data import MarketDataClient
+from src.web.data_source_manager import get_data_source_manager
 from src.web.trade_planner import get_trade_planner, get_plan_manager, TradePlanStatus
 from src.web.position_sizing import calculate_risk_based_size
 from src.web.risk_config import get_risk_config
 from src.web.trade_journal import get_trade_journal
 from src.web.risk_manager import get_risk_manager
 from src.web.paper_trading import get_paper_trading_manager
-from src.web.daily_positions import get_daily_tracker
-from src.web.data_pipeline import get_data_pipeline
-from src.web.data_collectors.financial_data import get_financial_collector
-from src.web.data_collectors.news_sentiment import get_news_collector
+# Optional modules - commented out if not present
+# from src.web.daily_positions import get_daily_tracker
+# from src.web.data_pipeline import get_data_pipeline
+# from src.web.data_collectors.financial_data import get_financial_collector
+# from src.web.data_collectors.news_sentiment import get_news_collector
+
+# Stub functions for optional modules
+def get_daily_tracker():
+    return None
+def get_data_pipeline():
+    return None
+def get_financial_collector():
+    return None
+def get_news_collector():
+    return None
 from typing import Dict
+
+# Phase 2.1: Flask-SocketIO for WebSocket support
+from flask_socketio import SocketIO, emit
+from src.web.websocket_server import init_websocket_handlers, get_ws_manager
+
+# Phase 2.5: Trading mode manager
+from src.web.trading_mode import get_trading_mode_manager
+from src.web.holdings_db import get_holdings_db
+from src.web.portfolio_recorder import get_portfolio_recorder
+
+# ELITE AI System
+from src.web.ai_models.elite_signal_generator import get_elite_signal_generator
+from src.web.ai_models.model_registry import get_model_registry
+from src.web.ai_models.performance_tracker import get_performance_tracker
+from src.web.ai_models.advanced_features import make_advanced_features, get_advanced_feature_columns
 
 # Load environment variables (optional .env)
 load_dotenv()
@@ -58,6 +85,10 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)  # Sessions last 7 
 app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# Phase 2.1: Initialize Flask-SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+init_websocket_handlers(socketio)
 
 @app.before_request
 def make_session_permanent():
@@ -366,45 +397,139 @@ def get_chart_data(ticker):
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Failed to load chart data: {str(e)}'}), 500
 
-@app.route('/api/signals/<ticker>')
+@app.route('/api/signals/<path:ticker>')
 def get_signals(ticker):
-    """Get trading signals for a ticker. Optionally generate trade plan with ?generate_plan=true&trading_type=swing"""
+    """
+    Get trading signals for a ticker using ELITE AI system
+    Phase 3: Enhanced with ensemble models and advanced features
+    Query params: ?elite=true (default), ?generate_plan=true, ?trading_type=swing
+    """
     try:
-        # Check if trade plan generation is requested
+        # Decode URL-encoded ticker (handles %5E for ^, etc.)
+        from urllib.parse import unquote
+        ticker = unquote(ticker)
+        
+        # Handle common ticker variations
+        ticker = ticker.strip()
+        
+        # Map common index names to proper tickers
+        index_map = {
+            'nifty': '^NSEI',
+            'nifty50': '^NSEI',
+            'banknifty': '^NSEBANK',
+            'sensex': '^BSESN',
+            'vix': '^INDIAVIX',
+            'indiavix': '^INDIAVIX'
+        }
+        
+        ticker_lower = ticker.lower()
+        if ticker_lower in index_map:
+            ticker = index_map[ticker_lower]
+            logger.info(f"[Signals] Mapped {ticker_lower} to {ticker}")
+        
+        logger.info(f"[Signals] Processing signal request for ticker: {ticker}")
+        
+        # Check if ELITE mode is enabled (default: true)
+        use_elite = request.args.get('elite', 'true').lower() == 'true'
         generate_plan = request.args.get('generate_plan', 'false').lower() == 'true'
         trading_type = request.args.get('trading_type', 'swing')
+        
+        # Use ELITE signal generator if enabled
+        if use_elite:
+            try:
+                elite_generator = get_elite_signal_generator()
+                signal_response = elite_generator.generate_signal(
+                    ticker=ticker,
+                    use_ensemble=True,
+                    use_multi_timeframe=True
+                )
+                
+                if 'error' not in signal_response:
+                    # Generate trade plan if requested
+                    if generate_plan:
+                        try:
+                            account_balance = 100000.0  # Default
+                            client = _get_upstox_client()
+                            if client:
+                                try:
+                                    holdings = client.get_holdings()
+                                    if holdings:
+                                        total_value = sum(
+                                            float(h.get('quantity', 0) or 0) * float(h.get('last_price', 0) or h.get('ltp', 0) or 0)
+                                            for h in holdings
+                                        )
+                                        if total_value > 0:
+                                            account_balance = total_value * 1.5
+                                except:
+                                    pass
+                            
+                            planner = get_trade_planner()
+                            plan = planner.generate_trade_plan(
+                                signal_data=signal_response,
+                                trading_type=trading_type,
+                                account_balance=account_balance
+                            )
+                            validation = planner.validate_trade_plan(plan)
+                            
+                            signal_response['trade_plan'] = plan.to_dict()
+                            signal_response['validation'] = validation.to_dict()
+                        except Exception as plan_err:
+                            logger.warning(f"[Signals] Error generating trade plan: {plan_err}")
+                            signal_response['trade_plan_error'] = str(plan_err)
+                    
+                    return jsonify(signal_response)
+                else:
+                    # ELITE returned an error, log it and fall through to basic
+                    logger.warning(f"[Signals] ELITE system returned error: {signal_response.get('error', 'Unknown error')}")
+            except Exception as elite_err:
+                logger.error(f"[Signals] ELITE system exception: {elite_err}", exc_info=True)
+                # Fall through to basic signal generation
+        
+        # Basic signal generation (fallback or if elite=false)
         # Get recent data - ensure dates are correct
-        today = datetime.now()
-        today_str = today.strftime('%Y-%m-%d')
+        from datetime import date, timedelta
+        today = date.today()
         
-        # Use today as end_date, but validate it's not in the future
-        end_date = today_str
+        # Use yesterday as end_date to ensure data availability
+        end_date_obj = today - timedelta(days=1)
         
-        # Start from 1 year ago
-        start_date = (today - timedelta(days=365)).strftime('%Y-%m-%d')
+        # Validate end_date
+        max_future_date = today + timedelta(days=1)
+        if end_date_obj > max_future_date:
+            logger.warning(f"[Signals] End date {end_date_obj} seems incorrect, using yesterday")
+            end_date_obj = today - timedelta(days=1)
         
-        # Validate dates
-        end_year = int(end_date.split('-')[0])
-        if end_year > today.year + 1:
-            logger.error(f"[Signals] End date {end_date} year {end_year} is in the future! Using today.")
-            end_date = today_str
-            start_date = (today - timedelta(days=365)).strftime('%Y-%m-%d')
+        end_date = end_date_obj.strftime('%Y-%m-%d')
+        start_date = (end_date_obj - timedelta(days=365)).strftime('%Y-%m-%d')  # 1 year before
         
-        logger.info(f"[Signals] Date range for {ticker}: {start_date} to {end_date}")
+        logger.info(f"[Signals] Using dynamic date range for {ticker}: {start_date} to {end_date} (today: {today})")
         
         Path("cache").mkdir(parents=True, exist_ok=True)
         cache_path = Path('cache') / f"{ticker.replace('^', '').replace(':', '_').replace('/', '_')}.csv"
+        
+        # Fix Bug 1: Check if cache is stale and force refresh if needed
+        # Cache is stale if it's older than 1 day or if date range doesn't match current range
+        force_refresh = False
+        if cache_path.exists():
+            cache_age = (datetime.now() - datetime.fromtimestamp(cache_path.stat().st_mtime)).total_seconds()
+            # Refresh if cache is older than 1 day (86400 seconds)
+            if cache_age > 86400:
+                force_refresh = True
+                logger.info(f"[Signals] Cache for {ticker} is {cache_age/3600:.1f} hours old, forcing refresh")
+        
         ohlcv = download_yahoo_ohlcv(
             ticker=ticker,
             start=start_date,
             end=end_date,
             interval='1d',
             cache_path=cache_path,
-            refresh=False
+            refresh=force_refresh
         )
         
         if ohlcv is None or len(ohlcv.df) == 0:
-            return jsonify({'error': 'No data available'}), 404
+            error_msg = f'No data available for ticker {ticker}. Please check if ticker is correct and try again.'
+            logger.error(f"[Signals] {error_msg}")
+            return jsonify({'error': error_msg, 'ticker': ticker}), 404
         
         # Generate features and predictions
         feat_df = make_features(ohlcv.df.copy())
@@ -468,7 +593,8 @@ def get_signals(ticker):
             'recent_high': recent_high,
             'recent_low': recent_low,
             'volatility': recent_volatility,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'source': 'basic'  # Indicate this is from basic signal generator
         }
         
         # Generate trade plan if requested
@@ -507,6 +633,81 @@ def get_signals(ticker):
         return jsonify(signal_response)
         
     except Exception as e:
+        error_msg = f'Error generating signals for {ticker}: {str(e)}'
+        logger.error(f"[Signals] {error_msg}", exc_info=True)
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"[Signals] Full traceback:\n{error_trace}")
+        if 'yfinance' in error_msg.lower() or 'download' in error_msg.lower():
+            error_msg = f"Data fetch error: {error_msg}. Please check network connection or try again later."
+        elif 'insufficient' in error_msg.lower() or 'data' in error_msg.lower():
+            error_msg = f"Insufficient data for {ticker}. Please try a different stock."
+        return jsonify({'error': error_msg, 'ticker': ticker}), 500
+
+@app.route('/api/ai/models', methods=['GET'])
+def get_ai_models():
+    """Phase 3: Get list of registered AI models"""
+    try:
+        registry = get_model_registry()
+        active_models = registry.get_active_models()
+        
+        models_list = [model.to_dict() for model in active_models]
+        
+        return jsonify({
+            'models': models_list,
+            'count': len(models_list)
+        })
+    except Exception as e:
+        logger.error(f"Error getting AI models: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ai/models/<model_id>/performance', methods=['GET'])
+def get_model_performance(model_id):
+    """Phase 3: Get performance metrics for a model"""
+    try:
+        days = int(request.args.get('days', 30))
+        tracker = get_performance_tracker()
+        metrics = tracker.calculate_metrics(model_id, days)
+        
+        return jsonify(metrics)
+    except Exception as e:
+        logger.error(f"Error getting model performance: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ai/models/compare', methods=['GET'])
+def compare_models():
+    """Phase 3: Compare multiple models"""
+    try:
+        model_ids = request.args.get('models', '').split(',')
+        days = int(request.args.get('days', 30))
+        
+        if not model_ids or model_ids == ['']:
+            # Get all active models
+            registry = get_model_registry()
+            model_ids = [m.model_id for m in registry.get_active_models()]
+        
+        tracker = get_performance_tracker()
+        comparison = tracker.compare_models(model_ids, days)
+        
+        return jsonify(comparison)
+    except Exception as e:
+        logger.error(f"Error comparing models: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ai/models/rankings', methods=['GET'])
+def get_model_rankings():
+    """Phase 3: Get ranked list of models by performance"""
+    try:
+        days = int(request.args.get('days', 30))
+        tracker = get_performance_tracker()
+        rankings = tracker.get_model_rankings(days)
+        
+        return jsonify({
+            'rankings': rankings,
+            'period_days': days
+        })
+    except Exception as e:
+        logger.error(f"Error getting model rankings: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/index-signals')
@@ -1043,14 +1244,194 @@ def get_prices():
             for ticker in watchlist:
                 prices[ticker] = _get_cached_price(ticker)
     else:
-        # Not connected to Upstox, use cached data
+        # Not connected to Upstox, fetch from Yahoo Finance
         for ticker in watchlist:
-            prices[ticker] = _get_cached_price(ticker)
+            try:
+                # Try to get latest price from Yahoo Finance
+                import yfinance as yf
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period="1d", interval="1m")
+                if not hist.empty:
+                    latest_price = float(hist['Close'].iloc[-1])
+                    prices[ticker] = {
+                        'price': latest_price,
+                        'change': 0,
+                        'change_pct': 0,
+                        'volume': int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                else:
+                    # Fallback to cached data
+                    prices[ticker] = _get_cached_price(ticker)
+            except Exception as e:
+                logger.warning(f"Error fetching Yahoo Finance price for {ticker}: {e}")
+                # Fallback to cached data
+                prices[ticker] = _get_cached_price(ticker)
     
     return jsonify(prices)
 
+@app.route('/api/market/start_stream', methods=['POST'])
+def start_stream():
+    """Phase 2.1: Start price streaming via WebSocket"""
+    try:
+        data = request.json or {}
+        instrument_keys = data.get('instrument_keys', [])
+        tickers = data.get('tickers', [])
+        
+        client = _get_upstox_client()
+        if not client or not client.access_token:
+            return jsonify({'error': 'Upstox not connected. Please connect first.'}), 400
+        
+        ws_manager = get_ws_manager()
+        
+        # Connect to WebSocket if not already connected
+        if not ws_manager.is_connected():
+            ws_manager.set_access_token(client.access_token)
+            success = ws_manager.connect()
+            if not success:
+                return jsonify({'error': 'Failed to connect to Upstox WebSocket'}), 500
+            
+            # Register callback to broadcast price updates to Flask-SocketIO clients
+            def broadcast_price_update(instrument_key, price_data):
+                socketio.emit('price_update', {
+                    'instrument_key': instrument_key,
+                    'data': price_data
+                }, broadcast=True)
+            
+            ws_manager.add_price_callback(broadcast_price_update)
+        
+        # Convert tickers to instrument keys if provided
+        if tickers:
+            instrument_master = InstrumentMaster()
+            for ticker in tickers:
+                inst_key = instrument_master.get_instrument_key(ticker)
+                if inst_key:
+                    instrument_keys.append(inst_key)
+        
+        # Subscribe to instruments
+        if instrument_keys:
+            success = ws_manager.subscribe_instruments(instrument_keys)
+            if not success:
+                return jsonify({'error': 'Failed to subscribe to instruments'}), 500
+        
+        subscribed = ws_manager.get_subscribed_instruments()
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Stream started with {len(subscribed)} instruments',
+            'subscribed_instruments': list(subscribed)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting stream: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/market/stop_stream', methods=['POST'])
+def stop_stream():
+    """Phase 2.1: Stop price streaming"""
+    try:
+        ws_manager = get_ws_manager()
+        ws_manager.disconnect()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Stream stopped'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error stopping stream: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/market/ws_status', methods=['GET'])
+def get_ws_status():
+    """Phase 2.1: Get WebSocket connection status"""
+    try:
+        ws_manager = get_ws_manager()
+        status = ws_manager.get_status()
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error getting WebSocket status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/market-indices', methods=['GET'])
+def get_market_indices():
+    """Get live data for all major Indian stock market indices"""
+    indices_config = [
+        # Major Indices
+        {'id': 'nifty', 'ticker': '^NSEI', 'label': 'NIFTY 50', 'upstox_key': 'NSE_INDEX|Nifty 50'},
+        {'id': 'sensex', 'ticker': '^BSESN', 'label': 'SENSEX', 'upstox_key': 'BSE_INDEX|SENSEX'},
+        {'id': 'banknifty', 'ticker': '^NSEBANK', 'label': 'BANKNIFTY', 'upstox_key': 'NSE_INDEX|Nifty Bank'},
+        {'id': 'vix', 'ticker': '^INDIAVIX', 'label': 'INDIA VIX', 'upstox_key': 'NSE_INDEX|India VIX'},
+        # Sectoral Indices
+        {'id': 'niftyit', 'ticker': '^CNXIT', 'label': 'NIFTY IT', 'upstox_key': 'NSE_INDEX|Nifty IT'},
+        {'id': 'niftyfmcg', 'ticker': '^CNXFMCG', 'label': 'NIFTY FMCG', 'upstox_key': 'NSE_INDEX|Nifty FMCG'},
+        {'id': 'niftypharma', 'ticker': '^CNXPHARMA', 'label': 'NIFTY PHARMA', 'upstox_key': 'NSE_INDEX|Nifty Pharma'},
+        {'id': 'niftyauto', 'ticker': '^CNXAUTO', 'label': 'NIFTY AUTO', 'upstox_key': 'NSE_INDEX|Nifty Auto'},
+        {'id': 'niftymetal', 'ticker': '^CNXMETAL', 'label': 'NIFTY METAL', 'upstox_key': 'NSE_INDEX|Nifty Metal'},
+        {'id': 'niftyenergy', 'ticker': '^CNXENERGY', 'label': 'NIFTY ENERGY', 'upstox_key': 'NSE_INDEX|Nifty Energy'},
+        {'id': 'niftyrealty', 'ticker': '^CNXREALTY', 'label': 'NIFTY REALTY', 'upstox_key': 'NSE_INDEX|Nifty Realty'},
+        {'id': 'niftypsu', 'ticker': '^CNXPSU', 'label': 'NIFTY PSU', 'upstox_key': 'NSE_INDEX|Nifty PSU Bank'},
+        {'id': 'niftymidcap', 'ticker': '^CNXMID', 'label': 'NIFTY MIDCAP', 'upstox_key': 'NSE_INDEX|Nifty Midcap 100'},
+        {'id': 'niftysmallcap', 'ticker': '^CNXSMALLCAP', 'label': 'NIFTY SMALLCAP', 'upstox_key': 'NSE_INDEX|Nifty Smallcap 100'},
+    ]
+    
+    results = {}
+    data_source_manager = get_data_source_manager()
+    
+    # Fetch from DataSourceManager (NSE → Upstox → Yahoo Finance)
+    for index in indices_config:
+        try:
+            index_data, source = data_source_manager.get_index_data(index['id'])
+            
+            if index_data:
+                results[index['id']] = {
+                    'value': index_data.get('value', 0),
+                    'change': index_data.get('change', 0),
+                    'change_pct': index_data.get('change_pct', 0),
+                    'source': source.name.lower() if source else 'unknown'
+                }
+                logger.debug(f"Got {index['label']} from {source.name if source else 'unknown'}")
+            else:
+                # Fallback to cached data
+                try:
+                    cached = _get_cached_price(index['ticker'])
+                    if cached and 'price' in cached:
+                        results[index['id']] = {
+                            'value': cached['price'],
+                            'change': cached.get('change', 0),
+                            'change_pct': cached.get('change_pct', 0),
+                            'source': 'cached'
+                        }
+                except:
+                    pass
+                    
+        except Exception as e:
+            logger.warning(f"Error fetching {index['label']}: {e}")
+            continue
+    
+    return jsonify(results)
+
 def _get_cached_price(ticker: str) -> Dict:
-    """Fallback: Get price from cached Yahoo Finance data"""
+    """
+    Get cached price - now uses DataSourceManager for better data quality
+    Falls back to cache if DataSourceManager fails
+    """
+    # Try DataSourceManager first
+    try:
+        data_source_manager = get_data_source_manager()
+        quote, source = data_source_manager.get_quote(ticker, use_cache=True)
+        
+        if quote and quote.get('current_price', 0) > 0:
+            return {
+                'price': quote.get('current_price', 0),
+                'change': quote.get('change', 0),
+                'change_pct': quote.get('change_pct', 0),
+                'source': quote.get('source', 'unknown')
+            }
+    except Exception as e:
+        logger.debug(f"DataSourceManager failed for {ticker}, using cache: {e}")
+    
+    # Fallback to original cache logic
     try:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -1391,7 +1772,21 @@ def upstox_callback():
         logger.info(f"[Phase 1.2] Using redirect_uri: {redirect_uri}")
         logger.info(f"[Phase 1.2] Using API Key: {api_key[:8]}...")
         
-        auth_success = upstox_api.authenticate(auth_code)
+        auth_result = upstox_api.authenticate(auth_code)
+        auth_success = False
+        refresh_token = None
+        
+        if isinstance(auth_result, dict):
+            # New format: returns dict with access_token and refresh_token
+            access_token = auth_result.get('access_token')
+            refresh_token = auth_result.get('refresh_token')
+            if access_token:
+                upstox_api.set_access_token(access_token)
+                auth_success = True
+        elif auth_result:
+            # Old format: returns True
+            auth_success = True
+        
         if not auth_success:
             logger.error(f"[Phase 1.2] Authentication failed - Invalid Credentials error")
             logger.error(f"[Phase 1.2] This usually means redirect URI mismatch")
@@ -1399,7 +1794,7 @@ def upstox_callback():
             logger.error(f"[Phase 1.2] Please verify this EXACT URI is in Upstox Portal")
         
         if auth_success:
-            connection_manager.save_connection(api_key, api_secret, redirect_uri, upstox_api.access_token)
+            connection_manager.save_connection(api_key, api_secret, redirect_uri, upstox_api.access_token, refresh_token)
             
             # Test connection
             logger.info("[Phase 1.2] Testing profile fetch...")
@@ -1517,6 +1912,33 @@ def upstox_callback():
         <p><a href="/" style="color: #6366f1;">Return to Dashboard</a></p>
         ''', 500
 
+@app.route('/api/upstox/health', methods=['GET'])
+def check_upstox_health():
+    """Phase 2.1: Check Upstox connection health"""
+    try:
+        client = _get_upstox_client()
+        if not client:
+            return jsonify({
+                'healthy': False,
+                'message': 'Not connected to Upstox',
+                'connected': False
+            }), 200
+        
+        health = client.check_connection_health()
+        return jsonify({
+            'healthy': health['healthy'],
+            'message': health['message'],
+            'connected': True,
+            'profile': health.get('profile')
+        })
+    except Exception as e:
+        logger.error(f"[Upstox Health] Error checking health: {e}")
+        return jsonify({
+            'healthy': False,
+            'message': f'Health check error: {str(e)}',
+            'connected': False
+        }), 500
+
 @app.route('/api/upstox/status', methods=['GET'])
 def upstox_status():
     """Phase 1.2: Get Upstox connection status"""
@@ -1584,21 +2006,173 @@ def test_upstox_connection():
 
 @app.route('/api/upstox/orders', methods=['GET'])
 def get_orders():
-    """Get order history"""
+    """Get order history from Upstox - formatted for dashboard"""
     client = _get_upstox_client()
     if not client:
         return jsonify({'error': 'Upstox not connected. Please connect first.'}), 400
     try:
+        logger.info("[Orders] Fetching orders from Upstox...")
         orders = client.get_orders()
-        return jsonify(orders)
+        logger.info(f"[Orders] Received {len(orders)} orders from Upstox")
+        
+        if not orders:
+            return jsonify([])
+        
+        # Format orders for dashboard display
+        formatted = []
+        for order in orders:
+            # Extract order data - handle different field names
+            order_id = order.get('order_id') or order.get('orderId') or order.get('order_id') or 'N/A'
+            symbol = (order.get('tradingsymbol') or 
+                     order.get('trading_symbol') or
+                     order.get('symbol') or 
+                     order.get('instrument_key', '').split('|')[-1] if order.get('instrument_key') else 'N/A')
+            
+            transaction_type = order.get('transaction_type') or order.get('type') or 'N/A'
+            quantity = float(order.get('quantity', 0) or order.get('qty', 0) or 0)
+            price = float(order.get('price', 0) or order.get('limit_price', 0) or order.get('trigger_price', 0) or 0)
+            status = order.get('status') or order.get('order_status') or 'PENDING'
+            order_type = order.get('order_type') or order.get('product') or 'MARKET'
+            timestamp = order.get('order_timestamp') or order.get('timestamp') or order.get('order_time') or ''
+            
+            # Clean symbol
+            if symbol and symbol != 'N/A':
+                if '|' in str(symbol):
+                    symbol = str(symbol).split('|')[-1]
+                symbol = str(symbol).replace('NSE_EQ|', '').replace('BSE_EQ|', '')
+            
+            formatted.append({
+                'order_id': str(order_id),
+                'symbol': symbol,
+                'transaction_type': transaction_type.upper(),
+                'quantity': quantity,
+                'price': price,
+                'status': status.upper(),
+                'order_type': order_type,
+                'timestamp': timestamp,
+                'product': order.get('product', 'MIS')
+            })
+        
+        logger.info(f"[Orders] Returning {len(formatted)} formatted orders")
+        return jsonify(formatted)
     except Exception as e:
+        logger.error(f"[Orders] Error fetching orders: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/orders/<order_id>', methods=['GET'])
+def get_order_details(order_id):
+    """Phase 2.2: Get detailed order information"""
+    try:
+        # Phase 2.5: Use trading mode manager
+        mode_manager = get_trading_mode_manager()
+        paper_mode = mode_manager.is_paper_mode()
+        
+        if paper_mode:
+            paper_manager = get_paper_trading_manager()
+            orders = paper_manager.get_orders()
+            order = next((o for o in orders if o.get('order_id') == order_id), None)
+            if order:
+                return jsonify(order)
+            return jsonify({'error': 'Order not found'}), 404
+        else:
+            # Live trading - fetch from Upstox
+            client = _get_upstox_client()
+            if not client:
+                return jsonify({'error': 'Upstox not connected'}), 400
+            
+            orders = client.get_orders()
+            order = next((o for o in orders if str(o.get('order_id')) == str(order_id) or str(o.get('orderId')) == str(order_id)), None)
+            if order:
+                return jsonify(order)
+            return jsonify({'error': 'Order not found'}), 404
+            
+    except Exception as e:
+        logger.error(f"Error getting order details: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/orders/<order_id>/modify', methods=['POST'])
+def modify_order(order_id):
+    """Phase 2.2: Modify an existing order"""
+    try:
+        data = request.json or {}
+        quantity = data.get('quantity')
+        price = data.get('price')
+        order_type = data.get('order_type')
+        
+        # Phase 2.5: Use trading mode manager
+        mode_manager = get_trading_mode_manager()
+        paper_mode = mode_manager.is_paper_mode()
+        
+        if paper_mode:
+            paper_manager = get_paper_trading_manager()
+            result = paper_manager.modify_order(
+                order_id=order_id,
+                quantity=quantity,
+                price=price,
+                order_type=order_type
+            )
+            if result.get('status') == 'error':
+                return jsonify(result), 400
+            return jsonify(result)
+        else:
+            # Live trading - modify via Upstox API
+            client = _get_upstox_client()
+            if not client:
+                return jsonify({'error': 'Upstox not connected'}), 400
+            
+            # Upstox modify order API call
+            # Note: Upstox API may have different endpoint for modification
+            result = client.modify_order(
+                order_id=order_id,
+                quantity=quantity,
+                price=price,
+                order_type=order_type
+            )
+            if result.get('error'):
+                return jsonify(result), 400
+            return jsonify({'status': 'success', 'message': 'Order modified successfully', 'order': result})
+            
+    except Exception as e:
+        logger.error(f"Error modifying order: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/orders/<order_id>/cancel', methods=['POST'])
+def cancel_order(order_id):
+    """Phase 2.2: Cancel an existing order"""
+    try:
+        # Phase 2.5: Use trading mode manager
+        mode_manager = get_trading_mode_manager()
+        paper_mode = mode_manager.is_paper_mode()
+        
+        if paper_mode:
+            paper_manager = get_paper_trading_manager()
+            result = paper_manager.cancel_order(order_id)
+            if result.get('status') == 'error':
+                return jsonify(result), 400
+            return jsonify(result)
+        else:
+            # Live trading - cancel via Upstox API
+            client = _get_upstox_client()
+            if not client:
+                return jsonify({'error': 'Upstox not connected'}), 400
+            
+            result = client.cancel_order(order_id)
+            if result.get('error'):
+                return jsonify(result), 400
+            return jsonify({'status': 'success', 'message': 'Order cancelled successfully'})
+            
+    except Exception as e:
+        logger.error(f"Error cancelling order: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/upstox/place_order', methods=['POST'])
 def place_order():
-    """Place order through Upstox (real trading) or Paper Trading (simulation)"""
-    # Check if paper trading mode is enabled (from session or environment)
-    paper_mode = session.get('paper_trading_mode', False) or PAPER_TRADING_MODE
+    """Phase 2.5: Place order through Upstox (real trading) or Paper Trading (simulation)"""
+    # Phase 2.5: Use trading mode manager
+    mode_manager = get_trading_mode_manager()
+    paper_mode = mode_manager.is_paper_mode()
     
     data = request.json
     ticker = data.get('ticker')
@@ -1846,13 +2420,91 @@ def get_holdings():
 
 @app.route('/api/positions')
 def get_positions():
-    """Get positions data"""
+    """Get positions data from Upstox - formatted for dashboard display"""
     client = _get_upstox_client()
     if not client:
         return jsonify({'error': 'Upstox not connected. Please connect first.'}), 400
     try:
-        return jsonify(client.get_positions())
+        logger.info("[Positions] Fetching positions from Upstox...")
+        positions = client.get_positions()
+        logger.info(f"[Positions] Received {len(positions)} positions from Upstox")
+        
+        if not positions:
+            return jsonify([])
+        
+        # Format positions for dashboard display
+        formatted = []
+        for pos in positions:
+            # Extract position data - handle different field names
+            quantity = float(pos.get('quantity', 0) or pos.get('qty', 0) or pos.get('net_quantity', 0) or 0)
+            avg_price = float(pos.get('average_price', 0.0) or pos.get('avg_price', 0.0) or pos.get('price', 0.0) or 0.0)
+            last_price = float(pos.get('last_price', 0.0) or pos.get('ltp', 0.0) or pos.get('current_price', 0.0) or 0.0)
+            
+            # Determine buy/sell from quantity (positive = buy/long, negative = sell/short)
+            is_buy = quantity >= 0
+            transaction_type = 'BUY' if is_buy else 'SELL'
+            
+            # Calculate P&L
+            invested_value = abs(quantity) * avg_price
+            current_value = abs(quantity) * last_price
+            
+            # P&L calculation depends on position type
+            if is_buy:
+                # Long position: profit when price goes up
+                pnl = current_value - invested_value
+            else:
+                # Short position: profit when price goes down
+                pnl = invested_value - current_value
+            
+            pnl_pct = (pnl / invested_value * 100) if invested_value > 0 else 0.0
+            
+            # Get symbol
+            symbol = (pos.get('tradingsymbol') or 
+                     pos.get('trading_symbol') or
+                     pos.get('symbol') or 
+                     pos.get('name') or 'N/A')
+            
+            # Clean symbol
+            if symbol and symbol != 'N/A':
+                if '|' in str(symbol):
+                    symbol = str(symbol).split('|')[-1]
+                symbol = str(symbol).replace('NSE_EQ|', '').replace('BSE_EQ|', '')
+            
+            # Get product type
+            product = pos.get('product', 'MIS')  # MIS, CNC, NRML
+            
+            # Get exchange
+            exchange = pos.get('exchange', 'NSE')
+            
+            formatted.append({
+                'symbol': symbol,
+                'ticker': f"{symbol}.NS" if exchange == 'NSE' else f"{symbol}.BO",
+                'quantity': quantity,
+                'net_quantity': abs(quantity),  # Absolute quantity for display
+                'transaction_type': transaction_type,
+                'product': product,
+                'exchange': exchange,
+                'entry_price': avg_price,
+                'average_price': avg_price,
+                'last_price': last_price,
+                'ltp': last_price,
+                'current_price': last_price,
+                'invested_value': invested_value,
+                'current_value': current_value,
+                'pnl': pnl,
+                'pnl_pct': pnl_pct,
+                'overall_pnl': pnl,
+                'overall_pnl_pct': pnl_pct,
+                'intraday_pnl': pnl,  # For intraday positions
+                'status': 'OPEN'  # Positions are always open
+            })
+        
+        logger.info(f"[Positions] Returning {len(formatted)} formatted positions")
+        return jsonify(formatted)
     except Exception as e:
+        logger.error(f"[Positions] Error fetching positions: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/daily-positions')
@@ -2011,6 +2663,367 @@ def get_network_info():
         'redirect_uri': f'http://localhost:{port}/callback'  # Fast default
     })
 
+@app.route('/api/trading-mode', methods=['GET'])
+def get_trading_mode():
+    """Phase 2.5: Get current trading mode"""
+    try:
+        mode_manager = get_trading_mode_manager()
+        mode_info = mode_manager.get_mode_info()
+        return jsonify(mode_info)
+    except Exception as e:
+        logger.error(f"Error getting trading mode: {e}", exc_info=True)
+        # Return default mode info on error
+        return jsonify({
+            'current_mode': 'paper',
+            'is_paper': True,
+            'is_live': False,
+            'error': str(e)
+        }), 200  # Return 200 with error in response instead of 500
+
+@app.route('/api/trading-mode', methods=['POST'])
+def set_trading_mode():
+    """Phase 2.5: Set trading mode"""
+    try:
+        data = request.json or {}
+        mode = data.get('mode')
+        user_confirmation = data.get('user_confirmation', False)
+        
+        if not mode:
+            return jsonify({'error': 'Mode is required'}), 400
+        
+        mode_manager = get_trading_mode_manager()
+        result = mode_manager.set_mode(mode, user_confirmation)
+        
+        if result.get('status') == 'error':
+            return jsonify(result), 400
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error setting trading mode: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/portfolio/history', methods=['GET'])
+def get_portfolio_history():
+    """Phase 2.4: Get portfolio history"""
+    try:
+        days = int(request.args.get('days', 30))
+        holdings_db = get_holdings_db()
+        history = holdings_db.get_portfolio_history(days)
+        return jsonify(history)
+    except Exception as e:
+        logger.error(f"Error getting portfolio history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/portfolio/snapshot', methods=['POST'])
+def record_portfolio_snapshot():
+    """Phase 2.4: Manually record a portfolio snapshot"""
+    try:
+        # Get holdings
+        holdings = []
+        cash_balance = 0
+        
+        # Try Upstox first
+        client = _get_upstox_client()
+        if client:
+            try:
+                holdings = client.get_holdings()
+            except:
+                pass
+        
+        # Fallback to paper trading
+        if not holdings:
+            try:
+                paper_manager = get_paper_trading_manager()
+                holdings = paper_manager.get_positions()
+                portfolio_summary = paper_manager.get_portfolio_summary()
+                cash_balance = portfolio_summary.get('cash_balance', 0)
+            except:
+                pass
+        
+        # Record snapshot
+        holdings_db = get_holdings_db()
+        snapshot_id = holdings_db.record_portfolio_snapshot(
+            holdings=holdings,
+            cash_balance=cash_balance
+        )
+        
+        if snapshot_id > 0:
+            return jsonify({
+                'status': 'success',
+                'message': 'Portfolio snapshot recorded',
+                'snapshot_id': snapshot_id
+            })
+        else:
+            return jsonify({'error': 'Failed to record snapshot'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error recording portfolio snapshot: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ========================================
+# STRATEGY API ENDPOINTS
+# Phase 3: Advanced Quant Strategies
+# ========================================
+
+from src.web.strategies.strategy_manager import get_strategy_manager
+
+@app.route('/api/strategies/available', methods=['GET'])
+def get_available_strategies():
+    """Get list of available trading strategies"""
+    try:
+        manager = get_strategy_manager()
+        strategies = manager.get_available_strategies()
+        
+        # Get info for each strategy
+        strategy_info = {}
+        for name in strategies:
+            strategy_info[name] = manager.get_strategy_info(name)
+        
+        return jsonify({
+            'strategies': strategies,
+            'active_strategy': manager.active_strategy,
+            'details': strategy_info
+        })
+    except Exception as e:
+        logger.error(f"Error getting strategies: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/strategies/set_active', methods=['POST'])
+def set_active_strategy():
+    """Set the active trading strategy"""
+    try:
+        data = request.json or {}
+        strategy_name = data.get('strategy')
+        
+        if not strategy_name:
+            return jsonify({'error': 'Strategy name required'}), 400
+        
+        manager = get_strategy_manager()
+        success = manager.set_active_strategy(strategy_name)
+        
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': f'Active strategy set to: {strategy_name}',
+                'active_strategy': manager.active_strategy
+            })
+        else:
+            return jsonify({'error': f'Strategy not found: {strategy_name}'}), 404
+            
+    except Exception as e:
+        logger.error(f"Error setting active strategy: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/strategies/execute', methods=['POST'])
+def execute_strategy():
+    """
+    Execute a trading strategy and get signal
+    
+    Request body:
+    {
+        "ticker": "RELIANCE.NS",
+        "strategy": "ml" (optional, uses active if not specified),
+        "method": "single" or "ensemble" (optional)
+    }
+    """
+    try:
+        data = request.json or {}
+        ticker = data.get('ticker')
+        strategy_name = data.get('strategy')  # Optional
+        method = data.get('method', 'single')  # 'single' or 'ensemble'
+        
+        if not ticker:
+            return jsonify({'error': 'Ticker required'}), 400
+        
+        # Get current market data
+        try:
+            # Try to get live price from Upstox if connected
+            client = _get_upstox_client()
+            current_price = None
+            market_data = {}
+            
+            if client:
+                from src.web.instrument_master import InstrumentMaster
+                from src.web.market_data import MarketDataClient
+                inst_master = InstrumentMaster()
+                market_client = MarketDataClient(client.access_token)
+                inst_key = inst_master.get_instrument_key(ticker)
+                
+                if inst_key:
+                    quote = market_client.get_quote(inst_key)
+                    if quote:
+                        current_price = quote.get('ltp') or quote.get('last_price', 0)
+            
+            # Fallback: Try to get from Yahoo Finance cache
+            if not current_price:
+                prices_response = _get_cached_price(ticker)
+                current_price = prices_response.get('price', 0)
+            
+            if not current_price or current_price == 0:
+                return jsonify({'error': f'Could not get price for {ticker}'}), 400
+            
+            # Get historical features (simplified - you should load from your research module)
+            # For now, calculate basic features
+            from src.research.data import load_cached_csv
+            from src.research.features import make_features
+            
+            try:
+                df = load_cached_csv(ticker)
+                if df is not None and not df.empty:
+                    df_features = make_features(df)
+                    latest = df_features.iloc[-1]
+                    
+                    market_data = {
+                        'current_price': current_price,
+                        'sma_10': latest.get('sma_10', current_price),
+                        'sma_20': (latest.get('sma_10', 0) + latest.get('sma_50', 0)) / 2,  # Approximate
+                        'sma_50': latest.get('sma_50', current_price),
+                        'ema_20': latest.get('ema_20', current_price),
+                        'rsi_14': latest.get('rsi_14', 50),
+                        'macd': latest.get('macd', 0),
+                        'macd_signal': latest.get('macd_signal', 0),
+                        'macd_hist': latest.get('macd_hist', 0),
+                        'ret_1': latest.get('ret_1', 0),
+                        'ret_5': latest.get('ret_5', 0),
+                        'vol_10': latest.get('vol_10', 0.01),
+                        'volume': latest.get('volume', 0),
+                    }
+                    
+                    # Calculate additional metrics
+                    prices = df['close'].tail(20).tolist()
+                    price_std = df['close'].tail(20).std()
+                    market_data['price_std'] = price_std
+                    market_data['bollinger_upper'] = market_data['sma_20'] + (2 * price_std)
+                    market_data['bollinger_lower'] = market_data['sma_20'] - (2 * price_std)
+                    
+                    # 20-day momentum
+                    if len(df) > 20:
+                        market_data['ret_20'] = (current_price - df['close'].iloc[-21]) / df['close'].iloc[-21] if df['close'].iloc[-21] > 0 else 0
+                    
+                    # Simplified ADX (trend strength) - use volatility as proxy
+                    market_data['adx'] = min(100, market_data['vol_10'] * 1000)
+                    
+            except Exception as e:
+                logger.warning(f"Could not load historical features: {e}")
+                # Use simplified data
+                market_data = {
+                    'current_price': current_price,
+                    'sma_10': current_price,
+                    'sma_20': current_price,
+                    'sma_50': current_price,
+                    'ema_20': current_price,
+                    'rsi_14': 50,
+                    'macd': 0,
+                    'macd_signal': 0,
+                    'macd_hist': 0,
+                    'ret_1': 0,
+                    'ret_5': 0,
+                    'ret_20': 0,
+                    'vol_10': 0.01,
+                    'price_std': current_price * 0.02,
+                    'bollinger_upper': current_price * 1.04,
+                    'bollinger_lower': current_price * 0.96,
+                    'adx': 25,
+                    'volume': 0
+                }
+        
+        except Exception as e:
+            logger.error(f"Error getting market data: {e}")
+            return jsonify({'error': f'Error getting market data: {str(e)}'}), 500
+        
+        # Execute strategy
+        manager = get_strategy_manager()
+        
+        if method == 'ensemble':
+            # Use ensemble of all strategies
+            ensemble_method = data.get('ensemble_method', 'weighted_average')
+            result = manager.combine_strategies(market_data, method=ensemble_method)
+        elif strategy_name:
+            # Use specific strategy
+            result = manager.execute_strategy(strategy_name, market_data)
+        else:
+            # Use active strategy
+            result = manager.execute_active_strategy(market_data)
+        
+        return jsonify({
+            'status': 'success',
+            'ticker': ticker,
+            'strategy_used': strategy_name or manager.active_strategy,
+            'signal': result.signal,
+            'confidence': round(result.confidence, 3),
+            'entry_price': round(result.entry_price, 2),
+            'stop_loss': round(result.stop_loss, 2),
+            'target_1': round(result.target_1, 2),
+            'target_2': round(result.target_2, 2),
+            'current_price': round(current_price, 2),
+            'metadata': result.metadata,
+            'market_data': {
+                k: round(v, 4) if isinstance(v, (int, float)) else v
+                for k, v in market_data.items()
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error executing strategy: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/strategies/compare', methods=['POST'])
+def compare_strategies():
+    """
+    Compare all strategies for a given ticker
+    
+    Request body:
+    {
+        "ticker": "RELIANCE.NS"
+    }
+    """
+    try:
+        data = request.json or {}
+        ticker = data.get('ticker')
+        
+        if not ticker:
+            return jsonify({'error': 'Ticker required'}), 400
+        
+        # Get market data (reuse logic from execute_strategy)
+        # For brevity, calling execute_strategy internally
+        manager = get_strategy_manager()
+        
+        # Execute all strategies
+        results = {}
+        for strategy_name in manager.get_available_strategies():
+            try:
+                # Call execute_strategy endpoint logic
+                response = execute_strategy()
+                response_data = response.get_json()
+                
+                if response_data.get('status') == 'success':
+                    results[strategy_name] = {
+                        'signal': response_data['signal'],
+                        'confidence': response_data['confidence'],
+                        'entry_price': response_data['entry_price']
+                    }
+            except Exception as e:
+                logger.error(f"Error executing {strategy_name}: {e}")
+        
+        # Determine consensus
+        signals = [r['signal'] for r in results.values()]
+        signal_counts = {'BUY': signals.count('BUY'), 'SELL': signals.count('SELL'), 'HOLD': signals.count('HOLD')}
+        consensus = max(signal_counts, key=signal_counts.get)
+        
+        return jsonify({
+            'status': 'success',
+            'ticker': ticker,
+            'strategies': results,
+            'consensus': consensus,
+            'signal_counts': signal_counts
+        })
+        
+    except Exception as e:
+        logger.error(f"Error comparing strategies: {e}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     host = os.getenv("FLASK_HOST", "0.0.0.0")
     port = int(os.getenv("FLASK_PORT", "5000"))
@@ -2022,4 +3035,5 @@ if __name__ == '__main__':
     print(f"{'='*60}")
     print("⚠️  LIVE TRADING ENABLED - Orders will execute with real money!")
     print(f"{'='*60}\n")
-    app.run(debug=True, host=host, port=port)
+    # Phase 2.1: Use socketio.run instead of app.run for WebSocket support
+    socketio.run(app, debug=True, host=host, port=port)
