@@ -66,6 +66,7 @@ Thumbs.db
 # ============================================
 /*.md
 !README.md
+!SETUP_GUIDE.md
 
 # Root-level test / diagnostic scripts
 /test_*.py
