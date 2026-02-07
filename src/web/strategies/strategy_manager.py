@@ -8,6 +8,7 @@ from .base_strategy import BaseStrategy, StrategyResult
 from .ml_strategy import MLStrategy
 from .mean_reversion_strategy import MeanReversionStrategy
 from .momentum_strategy import MomentumStrategy
+from .adaptive_elite_strategy import AdaptiveEliteStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,8 @@ class StrategyManager:
     AVAILABLE_STRATEGIES = {
         'ml': MLStrategy,
         'mean_reversion': MeanReversionStrategy,
-        'momentum': MomentumStrategy
+        'momentum': MomentumStrategy,
+        'adaptive_elite': AdaptiveEliteStrategy
     }
     
     def __init__(self):
@@ -55,6 +57,13 @@ class StrategyManager:
             'long_ma_period': 50,
             'momentum_period': 20,
             'min_trend_strength': 25
+        }))
+        
+        # Adaptive Elite Strategy
+        self.register_strategy('adaptive_elite', AdaptiveEliteStrategy({
+            'min_confidence': 0.70,
+            'use_ensemble': True,
+            'use_multi_timeframe': True
         }))
         
         logger.info(f"✅ Initialized {len(self.strategies)} strategies")

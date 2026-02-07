@@ -364,11 +364,17 @@
                     <div class="signals-header">
                         <h3><i class="fas fa-crosshairs"></i> Trading Signals & Entry/Exit Levels</h3>
                         <div class="signals-actions">
-                            <button class="btn-modern btn-primary" onclick="loadAllSignals()">
-                                <i class="fas fa-sync-alt"></i> Refresh All Signals
+                            <button class="btn-modern btn-primary" onclick="loadAdaptiveEliteSignals()" style="margin-right: 0.5rem;">
+                                <i class="fas fa-brain"></i> Adaptive Elite Signals
+                            </button>
+                            <button class="btn-modern btn-secondary" onclick="loadAllSignals()" style="margin-right: 0.5rem;">
+                                <i class="fas fa-sync-alt"></i> All Signals
                             </button>
                             <button class="btn-modern btn-secondary" onclick="showIndexSignals()">
                                 <i class="fas fa-chart-bar"></i> Index Signals
+                            </button>
+                            <button class="btn-modern btn-primary" onclick="loadAllStocksSignals()">
+                                <i class="fas fa-database"></i> All Stocks Signals
                             </button>
                         </div>
                     </div>
@@ -533,9 +539,21 @@
                             </small>
                             <div class="info-box" style="margin-top: 0.5rem; padding: 0.75rem; background: #fef3c7; border-left: 3px solid #f59e0b;">
                                 <strong style="color: #92400e;">💡 Tip:</strong> 
-                                <span style="color: #78350f; font-size: 0.875rem;">
-                                    If you get "UDAPI100068" error, the redirect URI doesn't match. Copy the exact URI shown here and add it in Upstox Portal.
-                                </span>
+                                <div style="color: #78350f; font-size: 0.875rem; margin-top: 0.5rem;">
+                                    <strong>Add this EXACT redirect URI in Upstox Portal:</strong>
+                                    <div style="background: #fff; padding: 0.5rem; margin: 0.5rem 0; border-radius: 4px; font-family: monospace; font-size: 0.9rem; color: #1f2937;">
+                                        http://localhost:5000/callback
+                                    </div>
+                                    <div style="margin-top: 0.5rem;">
+                                        <strong>Portal:</strong> 
+                                        <a href="https://account.upstox.com/developer/apps" target="_blank" style="color: #6366f1; text-decoration: underline;">
+                                            https://account.upstox.com/developer/apps
+                                        </a>
+                                    </div>
+                                    <div style="margin-top: 0.5rem; font-size: 0.8rem; color: #92400e;">
+                                        ⚠️ If you get "UDAPI100068" error, the redirect URI doesn't match exactly.
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="form-group-modern">

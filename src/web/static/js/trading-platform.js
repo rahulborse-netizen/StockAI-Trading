@@ -236,6 +236,24 @@ async function loadHoldings() {
             console.error('[ERROR] Upstox is not connected!');
             console.error('[ERROR] Status details:', status);
             
+            // Determine error message
+            let errorMessage = 'Please click "Connect" button to connect your Upstox account.';
+            let errorHint = '';
+            
+            if (status.connection_error) {
+                errorMessage = `Connection Error: ${status.connection_error}`;
+                if (status.connection_error.includes('timeout')) {
+                    errorHint = 'The connection timed out. Please check your internet connection and try again.';
+                } else if (status.connection_error.includes('expired') || status.connection_error.includes('invalid')) {
+                    errorHint = 'Your access token may have expired. Please reconnect your Upstox account.';
+                } else if (status.connection_error.includes('Status 401') || status.connection_error.includes('Unauthorized')) {
+                    errorHint = 'Authentication failed. Please reconnect your Upstox account with a fresh token.';
+                }
+            } else if (status.has_token && !status.connected) {
+                errorMessage = 'Token exists but connection check failed.';
+                errorHint = 'Please try reconnecting your Upstox account.';
+            }
+            
             // Show user-friendly message
             const tbody = document.getElementById('holdings-table-body');
             if (tbody) {
@@ -245,10 +263,9 @@ async function loadHoldings() {
                             <div style="padding: 2rem;">
                                 <i class="fas fa-exclamation-triangle" style="font-size: 2rem; color: #f59e0b; margin-bottom: 1rem;"></i>
                                 <p><strong>Upstox Not Connected</strong></p>
-                                <p>Please click "Connect" button to connect your Upstox account.</p>
-                                <p style="font-size: 0.875rem; color: #94a3b8; margin-top: 0.5rem;">
-                                    Debug: ${status.error || 'No error message'}
-                                </p>
+                                <p>${errorMessage}</p>
+                                ${errorHint ? `<p style="font-size: 0.875rem; color: #94a3b8; margin-top: 0.5rem;">${errorHint}</p>` : ''}
+                                ${status.connection_error ? `<p style="font-size: 0.75rem; color: #64748b; margin-top: 0.5rem; font-family: monospace;">Details: ${status.connection_error}</p>` : ''}
                             </div>
                         </td>
                     </tr>
@@ -856,7 +873,11 @@ async function loadSignals() {
                     
                     if (!response.ok) {
                         const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-                        console.warn(`Signal API returned ${response.status} for ${ticker}:`, errorData.error);
+                        
+                        // Only log non-404 errors (404s are expected for invalid tickers)
+                        if (response.status !== 404) {
+                            console.warn(`Signal API returned ${response.status} for ${ticker}:`, errorData.error);
+                        }
                         
                         // Retry on 500 errors (server errors)
                         if (response.status >= 500 && retryCount < maxRetries) {
@@ -891,9 +912,24 @@ async function loadSignals() {
         
         const results = await Promise.all(signalPromises);
         const validSignals = results.filter(r => r !== null);
+        const failedTickers = stocks.filter((ticker, index) => results[index] === null);
         
+        // Log summary of failed tickers (only if there are failures)
+        if (failedTickers.length > 0 && failedTickers.length < stocks.length) {
+            console.log(`[Signals] Successfully loaded ${validSignals.length} signals. ${failedTickers.length} ticker(s) failed: ${failedTickers.join(', ')}`);
+        }
+        
+        // Show results or error message
         if (validSignals.length === 0) {
             // Show more helpful error message with troubleshooting tips
+            let errorDetails = '';
+            if (failedTickers.length > 0) {
+                errorDetails = `<p style="font-size: 0.75rem; color: #ef4444; margin-top: 0.5rem;">
+                    <strong>Invalid tickers detected:</strong> ${failedTickers.join(', ')}<br>
+                    These tickers may not exist or have incorrect formats. Consider removing them from your watchlist.
+                </p>`;
+            }
+            
             container.innerHTML = `
                 <div class="empty-state" style="text-align: center; padding: 2rem;">
                     <i class="fas fa-exclamation-triangle" style="font-size: 3rem; color: #f59e0b; margin-bottom: 1rem;"></i>
@@ -904,7 +940,9 @@ async function loadSignals() {
                         <br>• Market data temporarily unavailable
                         <br>• Server processing delay
                         <br>• Data source API rate limits
+                        ${failedTickers.length > 0 ? '<br>• Invalid ticker symbols in watchlist' : ''}
                     </p>
+                    ${errorDetails}
                     <div style="margin-top: 1.5rem;">
                         <button class="btn-modern btn-primary" onclick="loadSignals()" style="margin-right: 0.5rem;">
                             <i class="fas fa-sync-alt"></i> Retry Now
@@ -922,8 +960,21 @@ async function loadSignals() {
             return;
         }
         
+        // Show warning if some signals failed but others succeeded
+        let warningMessage = '';
+        if (failedTickers.length > 0 && validSignals.length > 0) {
+            warningMessage = `
+                <div class="alert alert-warning" style="margin-bottom: 1rem; padding: 0.75rem; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; color: #92400e;">
+                    <i class="fas fa-exclamation-triangle"></i> 
+                    <strong>Note:</strong> ${validSignals.length} signal(s) loaded successfully. 
+                    ${failedTickers.length} ticker(s) failed: ${failedTickers.join(', ')}. 
+                    These may be invalid tickers - consider removing them from your watchlist.
+                </div>
+            `;
+        }
+        
         // Render signals in a grid with enhanced display
-        container.innerHTML = `
+        container.innerHTML = warningMessage + `
             <div class="signals-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-top: 1rem;">
                 ${validSignals.map(({ ticker, signal }) => {
                     const signalClass = signal.signal === 'BUY' ? 'success' : 
@@ -1034,80 +1085,501 @@ function refreshHoldings() {
 async function showIndexSignals() {
     const section = document.getElementById('index-signals-section');
     const grid = document.getElementById('index-signals-grid');
+    const container = document.getElementById('signals-container');
+    
+    // Hide other sections
+    if (container) container.style.display = 'none';
     
     if (!section || !grid) return;
     
     section.style.display = 'block';
-    grid.innerHTML = '<div class="text-center"><i class="fas fa-spinner fa-spin"></i> Loading index signals...</div>';
+    grid.innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-3">Loading index signals...</p></div>';
     
     try {
-        const response = await fetch('/api/index-signals');
+        const response = await fetch('/api/index-signals', {
+            signal: AbortSignal.timeout(60000) // 60 second timeout
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         const signals = await response.json();
         
-        if (signals.length === 0) {
-            grid.innerHTML = '<div class="text-center text-muted">No index signals available</div>';
+        if (!signals || signals.length === 0) {
+            grid.innerHTML = '<div class="text-center text-muted p-4">No index signals available. Please try again later.</div>';
             return;
         }
         
-        grid.innerHTML = signals.map(signal => {
-            const signalClass = signal.signal === 'BUY' ? 'success' : 
-                               signal.signal === 'SELL' ? 'danger' : 'warning';
-            const probPercent = (signal.probability * 100).toFixed(1);
-            
-            return `
-                <div class="signal-card">
-                    <div class="signal-header">
-                        <h4>${signal.index_name || signal.ticker}</h4>
-                        <span class="badge bg-${signalClass}">${signal.signal}</span>
-                    </div>
-                    <div class="signal-body">
-                        <div class="signal-item">
-                            <span class="label">Current Price:</span>
-                            <span class="value">₹${signal.current_price.toFixed(2)}</span>
+        // Render signals in grid format
+        grid.innerHTML = `
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                ${signals.map(signal => {
+                    const signalClass = signal.signal === 'BUY' ? 'success' : 
+                                       signal.signal === 'SELL' ? 'danger' : 'warning';
+                    const probPercent = ((signal.probability || signal.confidence || 0) * 100).toFixed(1);
+                    const entryPrice = signal.entry_level || signal.entry_price || 0;
+                    
+                    return `
+                        <div class="signal-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem;">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h5 style="margin: 0; font-weight: 700;">${signal.index_name || signal.ticker.replace('^', '').replace('.NS', '').replace('.BO', '')}</h5>
+                                <span class="badge bg-${signalClass}" style="font-size: 0.875rem; padding: 0.5rem 0.75rem;">
+                                    <i class="fas ${signal.signal === 'BUY' ? 'fa-arrow-up' : signal.signal === 'SELL' ? 'fa-arrow-down' : 'fa-pause'}"></i> ${signal.signal}
+                                </span>
+                            </div>
+                            <div style="background: var(--bg-secondary); padding: 0.75rem; border-radius: 8px; margin-bottom: 1rem;">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
+                                    <span style="color: var(--text-primary); font-weight: 600;">₹${(signal.current_price || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Confidence:</span>
+                                    <span style="color: var(--text-primary); font-weight: 600;">${probPercent}%</span>
+                                </div>
+                                ${signal.signal !== 'HOLD' ? `
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
+                                    <span style="color: var(--text-primary);">₹${entryPrice.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
+                                    <span style="color: #ef4444;">₹${(signal.stop_loss || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
+                                    <span style="color: #10b981;">₹${(signal.target_1 || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                                </div>
+                                ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
+                            </div>
+                            ${signal.regime_type ? `
+                            <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-muted);">
+                                <span>${signal.regime_type}</span>
+                            </div>
+                            ` : ''}
                         </div>
-                        <div class="signal-item">
-                            <span class="label">Probability:</span>
-                            <span class="value">${probPercent}%</span>
-                        </div>
-                        <div class="signal-item">
-                            <span class="label">Entry Level:</span>
-                            <span class="value">₹${signal.entry_level.toFixed(2)}</span>
-                        </div>
-                        <div class="signal-item">
-                            <span class="label">Stop Loss:</span>
-                            <span class="value">₹${signal.stop_loss.toFixed(2)}</span>
-                        </div>
-                        <div class="signal-item">
-                            <span class="label">Target 1:</span>
-                            <span class="value">₹${signal.target_1.toFixed(2)}</span>
-                        </div>
-                        <div class="signal-item">
-                            <span class="label">Target 2:</span>
-                            <span class="value">₹${signal.target_2.toFixed(2)}</span>
-                        </div>
-                    </div>
-                    <div class="signal-footer mt-2">
-                        <button class="btn-modern btn-primary btn-sm me-1" onclick="generateTradePlan('${signal.ticker || signal.index_name}', 'intraday')" title="Generate Intraday Plan">
-                            <i class="fas fa-clock"></i> Intraday
-                        </button>
-                        <button class="btn-modern btn-info btn-sm me-1" onclick="generateTradePlan('${signal.ticker || signal.index_name}', 'swing')" title="Generate Swing Plan">
-                            <i class="fas fa-chart-line"></i> Swing
-                        </button>
-                        <button class="btn-modern btn-warning btn-sm" onclick="generateTradePlan('${signal.ticker || signal.index_name}', 'position')" title="Generate Position Plan">
-                            <i class="fas fa-chart-area"></i> Position
-                        </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
+                    `;
+                }).join('')}
+            </div>
+        `;
         
     } catch (error) {
         console.error('Error loading index signals:', error);
-        grid.innerHTML = '<div class="text-center text-danger">Error loading index signals</div>';
+        grid.innerHTML = `
+            <div class="text-center text-danger p-4">
+                <i class="fas fa-exclamation-triangle fa-2x mb-3"></i>
+                <p><strong>Error loading index signals</strong></p>
+                <p style="font-size: 0.875rem; color: var(--text-muted);">${error.message}</p>
+                <button class="btn-modern btn-primary mt-3" onclick="showIndexSignals()">
+                    <i class="fas fa-sync-alt"></i> Retry
+                </button>
+            </div>
+        `;
+    }
+}
+
+// Load all BSE/NSE stocks signals
+async function loadAllStocksSignals() {
+    const container = document.getElementById('signals-container');
+    if (!container) return;
+    
+    // Hide index signals section
+    const indexSection = document.getElementById('index-signals-section');
+    if (indexSection) indexSection.style.display = 'none';
+    
+    container.style.display = 'block';
+    container.innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-3">Loading signals for all BSE/NSE stocks...<br><small>This may take a few moments</small></p></div>';
+    
+    try {
+        // Load first batch (50 stocks)
+        const response = await fetch('/api/trading/signals/all-stocks?limit=50&offset=0&min_confidence=0.60', {
+            signal: AbortSignal.timeout(120000) // 2 minute timeout
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.status !== 'success' || !data.signals || data.signals.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-info-circle"></i>
+                    <p>No signals available. Try adjusting filters or check back later.</p>
+                    <button class="btn-modern btn-primary mt-3" onclick="loadAllStocksSignals()">
+                        <i class="fas fa-sync-alt"></i> Retry
+                    </button>
+                </div>
+            `;
+            return;
+        }
+        
+        // Render signals similar to Adaptive Elite Signals
+        let html = `
+            <div style="margin-bottom: 1rem; padding: 1rem; background: var(--card-bg); border-radius: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h4 style="margin: 0; color: var(--text-primary);">
+                            <i class="fas fa-chart-line"></i> All BSE/NSE Stocks Signals
+                        </h4>
+                        <p style="margin: 0.5rem 0 0 0; color: var(--text-muted); font-size: 0.875rem;">
+                            ${data.summary.buy_signals} BUY | ${data.summary.sell_signals} SELL | ${data.summary.hold_signals} HOLD
+                            <br><small>Showing ${data.signals.length} of ${data.pagination.total} stocks</small>
+                        </p>
+                    </div>
+                    <div>
+                        <button class="btn-modern btn-secondary" onclick="loadAllStocksSignals()" style="margin-right: 0.5rem;">
+                            <i class="fas fa-sync-alt"></i> Refresh
+                        </button>
+                        ${data.pagination.has_more ? `
+                        <button class="btn-modern btn-primary" onclick="loadMoreStocksSignals(${data.pagination.offset + data.pagination.limit})">
+                            <i class="fas fa-arrow-down"></i> Load More
+                        </button>
+                        ` : ''}
+                    </div>
+                </div>
+            </div>
+            <div class="signals-grid" id="all-stocks-signals-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem;">
+        `;
+        
+        data.signals.forEach(signal => {
+            const signalClass = signal.signal === 'BUY' ? 'success' : 
+                             signal.signal === 'SELL' ? 'danger' : 'warning';
+            const signalIcon = signal.signal === 'BUY' ? 'fa-arrow-up' : 
+                             signal.signal === 'SELL' ? 'fa-arrow-down' : 'fa-pause';
+            const confidencePercent = (signal.confidence * 100).toFixed(0);
+            const confidenceClass = signal.confidence >= 0.75 ? 'success' : 
+                                  signal.confidence >= 0.65 ? 'warning' : 'secondary';
+            
+            html += `
+                <div class="signal-card" data-signal-type="${signal.signal}" data-confidence="${signal.confidence}" 
+                     style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.75rem;">
+                        <div>
+                            <h5 style="margin: 0; color: var(--text-primary); font-size: 1rem;">${signal.ticker.replace('.NS', '').replace('.BO', '')}</h5>
+                            <span class="badge badge-${signalClass}" style="margin-top: 0.25rem; display: inline-block;">
+                                <i class="fas ${signalIcon}"></i> ${signal.signal}
+                            </span>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="badge badge-${confidenceClass}" style="font-size: 0.875rem;">
+                                ${confidencePercent}% confidence
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin: 0.75rem 0; padding: 0.75rem; background: var(--bg-secondary); border-radius: 4px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
+                            <span style="color: var(--text-primary); font-weight: 600;">₹${signal.current_price.toLocaleString('en-IN')}</span>
+                        </div>
+                        ${signal.signal !== 'HOLD' ? `
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
+                            <span style="color: var(--text-primary);">₹${signal.entry_price.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
+                            <span style="color: #ef4444;">₹${signal.stop_loss.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
+                            <span style="color: #10b981;">₹${signal.target_1.toLocaleString('en-IN')}</span>
+                        </div>
+                        ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        container.innerHTML = html;
+        
+        // Store pagination info
+        window.allStocksPagination = data.pagination;
+        
+    } catch (error) {
+        console.error('Error loading all stocks signals:', error);
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-exclamation-triangle"></i>
+                <p>Error loading signals: ${error.message}</p>
+                <button class="btn-modern btn-primary mt-3" onclick="loadAllStocksSignals()">
+                    <i class="fas fa-sync-alt"></i> Retry
+                </button>
+            </div>
+        `;
+    }
+}
+
+async function loadMoreStocksSignals(offset) {
+    const grid = document.getElementById('all-stocks-signals-grid');
+    if (!grid) return;
+    
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'text-center p-4';
+    loadingDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading more...';
+    grid.appendChild(loadingDiv);
+    
+    try {
+        const response = await fetch(`/api/trading/signals/all-stocks?limit=50&offset=${offset}&min_confidence=0.60`, {
+            signal: AbortSignal.timeout(120000)
+        });
+        
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const data = await response.json();
+        loadingDiv.remove();
+        
+        if (data.status === 'success' && data.signals && data.signals.length > 0) {
+            // Append new signals
+            data.signals.forEach(signal => {
+                const signalClass = signal.signal === 'BUY' ? 'success' : 
+                                 signal.signal === 'SELL' ? 'danger' : 'warning';
+                const signalIcon = signal.signal === 'BUY' ? 'fa-arrow-up' : 
+                                 signal.signal === 'SELL' ? 'fa-arrow-down' : 'fa-pause';
+                const confidencePercent = (signal.confidence * 100).toFixed(0);
+                const confidenceClass = signal.confidence >= 0.75 ? 'success' : 
+                                      signal.confidence >= 0.65 ? 'warning' : 'secondary';
+                
+                const card = document.createElement('div');
+                card.className = 'signal-card';
+                card.setAttribute('data-signal-type', signal.signal);
+                card.setAttribute('data-confidence', signal.confidence);
+                card.style.cssText = 'background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;';
+                card.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.75rem;">
+                        <div>
+                            <h5 style="margin: 0; color: var(--text-primary); font-size: 1rem;">${signal.ticker.replace('.NS', '').replace('.BO', '')}</h5>
+                            <span class="badge badge-${signalClass}" style="margin-top: 0.25rem; display: inline-block;">
+                                <i class="fas ${signalIcon}"></i> ${signal.signal}
+                            </span>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="badge badge-${confidenceClass}" style="font-size: 0.875rem;">
+                                ${confidencePercent}% confidence
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin: 0.75rem 0; padding: 0.75rem; background: var(--bg-secondary); border-radius: 4px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
+                            <span style="color: var(--text-primary); font-weight: 600;">₹${signal.current_price.toLocaleString('en-IN')}</span>
+                        </div>
+                        ${signal.signal !== 'HOLD' ? `
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
+                            <span style="color: var(--text-primary);">₹${signal.entry_price.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
+                            <span style="color: #ef4444;">₹${signal.stop_loss.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
+                            <span style="color: #10b981;">₹${signal.target_1.toLocaleString('en-IN')}</span>
+                        </div>
+                        ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+            
+            // Update pagination
+            window.allStocksPagination = data.pagination;
+            
+            // Update load more button if needed
+            if (!data.pagination.has_more) {
+                const loadMoreBtn = document.querySelector('button[onclick*="loadMoreStocksSignals"]');
+                if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+            }
+        }
+    } catch (error) {
+        loadingDiv.innerHTML = `<div class="text-danger">Error: ${error.message}</div>`;
     }
 }
 
 // Load all signals for holdings
+// Load Adaptive Elite signals for watchlist
+async function loadAdaptiveEliteSignals() {
+    const container = document.getElementById('signals-container');
+    if (!container) return;
+    
+    container.innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-3">Loading Adaptive Elite signals...</p></div>';
+    
+    try {
+        const response = await fetch('/api/trading/signals/watchlist');
+        const data = await response.json();
+        
+        if (data.status !== 'success' || !data.signals || data.signals.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-info-circle"></i>
+                    <p>No signals available. Add stocks to watchlist or check back later.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Filter to show only BUY/SELL signals (high confidence)
+        const actionableSignals = data.signals.filter(s => s.signal !== 'HOLD' && s.confidence >= 0.70);
+        const allSignals = data.signals;
+        
+        // Render signals
+        let html = `
+            <div style="margin-bottom: 1rem; padding: 1rem; background: var(--card-bg); border-radius: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h4 style="margin: 0; color: var(--text-primary);">
+                            <i class="fas fa-chart-line"></i> Adaptive Elite Strategy Signals
+                        </h4>
+                        <p style="margin: 0.5rem 0 0 0; color: var(--text-muted); font-size: 0.875rem;">
+                            ${data.summary.buy_signals} BUY | ${data.summary.sell_signals} SELL | ${data.summary.hold_signals} HOLD
+                        </p>
+                    </div>
+                    <div>
+                        <button class="btn-modern btn-secondary" onclick="loadAdaptiveEliteSignals()" style="margin-right: 0.5rem;">
+                            <i class="fas fa-sync-alt"></i> Refresh
+                        </button>
+                        <label style="display: inline-flex; align-items: center; cursor: pointer;">
+                            <input type="checkbox" id="show-only-actionable" onchange="filterActionableSignals()" style="margin-right: 0.5rem;">
+                            <span style="font-size: 0.875rem;">Show only BUY/SELL</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="signals-grid" id="adaptive-signals-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem;">
+        `;
+        
+        // Store all signals for filtering
+        window.adaptiveEliteSignals = allSignals;
+        
+        allSignals.forEach(signal => {
+            const signalClass = signal.signal === 'BUY' ? 'success' : 
+                             signal.signal === 'SELL' ? 'danger' : 'warning';
+            const signalIcon = signal.signal === 'BUY' ? 'fa-arrow-up' : 
+                             signal.signal === 'SELL' ? 'fa-arrow-down' : 'fa-pause';
+            const confidencePercent = (signal.confidence * 100).toFixed(0);
+            const confidenceClass = signal.confidence >= 0.75 ? 'success' : 
+                                  signal.confidence >= 0.65 ? 'warning' : 'secondary';
+            
+            const regimeEmoji = signal.regime_type === 'STRONG_TREND' ? '📈' :
+                               signal.regime_type === 'RANGING' ? '📊' :
+                               signal.regime_type === 'HIGH_VOLATILITY' ? '⚡' : '📉';
+            
+            html += `
+                <div class="signal-card" data-signal-type="${signal.signal}" data-confidence="${signal.confidence}" 
+                     style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; 
+                            ${signal.signal === 'HOLD' || signal.confidence < 0.70 ? 'opacity: 0.7;' : ''}">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.75rem;">
+                        <div>
+                            <h5 style="margin: 0; color: var(--text-primary); font-size: 1rem;">${signal.ticker}</h5>
+                            <span class="badge badge-${signalClass}" style="margin-top: 0.25rem; display: inline-block;">
+                                <i class="fas ${signalIcon}"></i> ${signal.signal}
+                            </span>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="badge badge-${confidenceClass}" style="font-size: 0.875rem;">
+                                ${confidencePercent}% confidence
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin: 0.75rem 0; padding: 0.75rem; background: var(--bg-secondary); border-radius: 4px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
+                            <span style="color: var(--text-primary); font-weight: 600;">₹${signal.current_price.toLocaleString('en-IN')}</span>
+                        </div>
+                        ${signal.signal !== 'HOLD' ? `
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
+                            <span style="color: var(--text-primary);">₹${signal.entry_price.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
+                            <span style="color: #ef4444;">₹${signal.stop_loss.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
+                            <span style="color: #10b981;">₹${signal.target_1.toLocaleString('en-IN')}</span>
+                        </div>
+                        ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
+                    </div>
+                    
+                    <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--text-muted);">
+                            <span>${regimeEmoji} ${signal.regime_type}</span>
+                            <span>${signal.market_phase}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-top: 0.25rem; font-size: 0.75rem; color: var(--text-muted);">
+                            <span>Trend: ${signal.trend_strength}</span>
+                            <span>Vol: ${signal.volatility_pct}%</span>
+                        </div>
+                    </div>
+                    
+                    ${signal.signal !== 'HOLD' ? `
+                    <div style="margin-top: 0.75rem;">
+                        <button class="btn-modern btn-primary" onclick="quickOrderFromSignal('${signal.ticker}', '${signal.signal}', ${signal.entry_price})" 
+                                style="width: 100%; font-size: 0.875rem;">
+                            <i class="fas fa-shopping-cart"></i> Place Order
+                        </button>
+                    </div>
+                    ` : ''}
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        container.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Error loading adaptive elite signals:', error);
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-exclamation-triangle"></i>
+                <p>Error loading signals. Please try again.</p>
+                <button class="btn-modern btn-primary" onclick="loadAdaptiveEliteSignals()">
+                    <i class="fas fa-sync-alt"></i> Retry
+                </button>
+            </div>
+        `;
+    }
+}
+
+function filterActionableSignals() {
+    const checkbox = document.getElementById('show-only-actionable');
+    const grid = document.getElementById('adaptive-signals-grid');
+    if (!grid || !checkbox) return;
+    
+    const cards = grid.querySelectorAll('.signal-card');
+    cards.forEach(card => {
+        const signalType = card.getAttribute('data-signal-type');
+        const confidence = parseFloat(card.getAttribute('data-confidence'));
+        
+        if (checkbox.checked) {
+            // Show only BUY/SELL with high confidence
+            if (signalType === 'HOLD' || confidence < 0.70) {
+                card.style.display = 'none';
+            } else {
+                card.style.display = 'block';
+            }
+        } else {
+            // Show all
+            card.style.display = 'block';
+        }
+    });
+}
+
+function quickOrderFromSignal(ticker, signal, entryPrice) {
+    // Open order placement modal with pre-filled data
+    if (typeof quickOrder === 'function') {
+        quickOrder(ticker, signal === 'BUY' ? 'BUY' : 'SELL');
+    } else {
+        alert(`Place ${signal} order for ${ticker} at ₹${entryPrice.toLocaleString('en-IN')}`);
+    }
+}
+
 async function loadAllSignals() {
     showNotification('Loading signals for all stocks...', 'info');
     

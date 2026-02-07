@@ -517,14 +517,19 @@ def get_signals(ticker):
                 force_refresh = True
                 logger.info(f"[Signals] Cache for {ticker} is {cache_age/3600:.1f} hours old, forcing refresh")
         
-        ohlcv = download_yahoo_ohlcv(
-            ticker=ticker,
-            start=start_date,
-            end=end_date,
-            interval='1d',
-            cache_path=cache_path,
-            refresh=force_refresh
-        )
+        try:
+            ohlcv = download_yahoo_ohlcv(
+                ticker=ticker,
+                start=start_date,
+                end=end_date,
+                interval='1d',
+                cache_path=cache_path,
+                refresh=force_refresh
+            )
+        except Exception as download_err:
+            error_msg = f'Failed to download data for {ticker}: {str(download_err)}'
+            logger.error(f"[Signals] {error_msg}")
+            return jsonify({'error': error_msg, 'ticker': ticker}), 404
         
         if ohlcv is None or len(ohlcv.df) == 0:
             error_msg = f'No data available for ticker {ticker}. Please check if ticker is correct and try again.'
@@ -712,7 +717,7 @@ def get_model_rankings():
 
 @app.route('/api/index-signals')
 def get_all_index_signals():
-    """Get trading signals for all major indices"""
+    """Get trading signals for all major indices using Adaptive Elite Strategy"""
     indices = [
         {'name': 'Nifty 50', 'ticker': '^NSEI', 'key': 'nifty50'},
         {'name': 'Bank Nifty', 'ticker': '^NSEBANK', 'key': 'banknifty'},
@@ -720,99 +725,45 @@ def get_all_index_signals():
     ]
     
     results = []
+    elite_generator = get_elite_signal_generator()
+    
     for index in indices:
         try:
-            # Get recent data - ensure dates are correct
-            today = datetime.now()
-            today_str = today.strftime('%Y-%m-%d')
-            end_date = today_str
-            start_date = (today - timedelta(days=365)).strftime('%Y-%m-%d')
+            logger.info(f"[Index Signals] Processing {index['name']} ({index['ticker']})")
             
-            # Validate dates
-            end_year = int(end_date.split('-')[0])
-            if end_year > today.year + 1:
-                logger.error(f"[Index Signals] End date {end_date} year {end_year} is in the future! Using today.")
-                end_date = today_str
-                start_date = (today - timedelta(days=365)).strftime('%Y-%m-%d')
-            
-            logger.info(f"[Index Signals] Date range for {index['name']}: {start_date} to {end_date}")
-            
-            Path("cache").mkdir(parents=True, exist_ok=True)
-            cache_path = Path('cache') / f"{index['ticker'].replace('^', '').replace(':', '_').replace('/', '_')}.csv"
-            ohlcv = download_yahoo_ohlcv(
+            # Use ELITE signal generator for better accuracy
+            signal_response = elite_generator.generate_signal(
                 ticker=index['ticker'],
-                start=start_date,
-                end=end_date,
-                interval='1d',
-                cache_path=cache_path,
-                refresh=False
+                use_ensemble=True,
+                use_multi_timeframe=True
             )
             
-            if ohlcv is None or len(ohlcv.df) == 0:
+            if 'error' in signal_response:
+                logger.warning(f"[Index Signals] ELITE error for {index['name']}: {signal_response.get('error')}")
                 continue
             
-            # Generate features and predictions
-            feat_df = make_features(ohlcv.df.copy())
-            labeled_df = add_label_forward_return_up(feat_df, days=1, threshold=0.0)
-            ml_df = clean_ml_frame(labeled_df, feature_cols=DEFAULT_FEATURE_COLS, label_col="label_up")
-            
-            if len(ml_df) < 50:
-                continue
-            
-            # Train model
-            train_df = ml_df.iloc[:-1].copy()
-            latest_row = ml_df.iloc[-1:].copy()
-            
-            trained, _ = train_baseline_classifier(
-                df=train_df,
-                feature_cols=DEFAULT_FEATURE_COLS,
-                label_col="label_up",
-                test_size=0.2,
-                random_state=42
-            )
-            
-            # Predict
-            X_latest = latest_row[DEFAULT_FEATURE_COLS].fillna(0)
-            prob_up = trained.model.predict_proba(X_latest)[0][1]
-            
-            # Calculate levels
-            current_price = float(latest_row['close'].iloc[0])
-            
-            # Entry/Exit levels
-            if prob_up >= 0.60:
-                signal = 'BUY'
-                entry_level = current_price * 0.998
-                stop_loss = current_price * 0.97
-                target_1 = current_price * 1.03
-                target_2 = current_price * 1.05
-            elif prob_up <= 0.40:
-                signal = 'SELL'
-                entry_level = current_price * 1.002
-                stop_loss = current_price * 1.03
-                target_1 = current_price * 0.97
-                target_2 = current_price * 0.95
-            else:
-                signal = 'HOLD'
-                entry_level = current_price * 1.002
-                stop_loss = current_price * 0.98
-                target_1 = current_price * 1.02
-                target_2 = current_price * 1.025
-            
+            # Format response for index signals
             results.append({
                 'index_name': index['name'],
                 'index_key': index['key'],
                 'ticker': index['ticker'],
-                'current_price': current_price,
-                'signal': signal,
-                'probability': float(prob_up),
-                'entry_level': entry_level,
-                'stop_loss': stop_loss,
-                'target_1': target_1,
-                'target_2': target_2,
-                'timestamp': datetime.now().isoformat()
+                'current_price': signal_response.get('current_price', 0),
+                'signal': signal_response.get('signal', 'HOLD'),
+                'probability': signal_response.get('confidence', 0.5),
+                'confidence': signal_response.get('confidence', 0.5),
+                'entry_level': signal_response.get('entry_price', 0),
+                'entry_price': signal_response.get('entry_price', 0),
+                'stop_loss': signal_response.get('stop_loss', 0),
+                'target_1': signal_response.get('target_1', 0),
+                'target_2': signal_response.get('target_2', 0),
+                'regime_type': signal_response.get('regime_type', 'UNKNOWN'),
+                'market_phase': signal_response.get('market_phase', ''),
+                'trend_strength': signal_response.get('trend_strength', ''),
+                'volatility_pct': signal_response.get('volatility_pct', 0),
+                'timestamp': signal_response.get('timestamp', datetime.now().isoformat())
             })
         except Exception as e:
-            logger.error(f"[Index Signals] Error for {index['name']}: {e}")
+            logger.error(f"[Index Signals] Error for {index['name']}: {e}", exc_info=True)
             continue
     
     return jsonify(results)
@@ -1323,8 +1274,15 @@ def start_stream():
         })
         
     except Exception as e:
-        logger.error(f"Error starting stream: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error starting stream: {e}", exc_info=True)
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Full traceback:\n{error_trace}")
+        return jsonify({
+            'error': str(e),
+            'error_type': type(e).__name__,
+            'message': 'Failed to start market data stream. Please check if Upstox is connected and try again.'
+        }), 500
 
 @app.route('/api/market/stop_stream', methods=['POST'])
 def stop_stream():
@@ -1945,10 +1903,6 @@ def upstox_status():
     try:
         info = connection_manager.get_connection_info()
         
-        # Double-check connection status
-        is_connected = connection_manager.is_connected()
-        info['connected'] = is_connected
-        
         # Get more detailed info
         has_api_key = bool(session.get('upstox_api_key'))
         has_api_secret = bool(session.get('upstox_api_secret'))
@@ -1961,7 +1915,22 @@ def upstox_status():
             'session_keys': list(session.keys())
         }
         
-        if is_connected:
+        # Double-check connection status and get error details if failed
+        is_connected = connection_manager.is_connected()
+        info['connected'] = is_connected
+        
+        # If not connected but token exists, try to get the error reason
+        if not is_connected and has_token:
+            client = connection_manager.get_client()
+            if client:
+                try:
+                    profile = client.get_profile()
+                    if 'error' in profile:
+                        info['connection_error'] = profile.get('error', 'Unknown error')
+                        info['connection_error_details'] = profile
+                except Exception as e:
+                    info['connection_error'] = f'Exception checking connection: {str(e)}'
+        elif is_connected:
             client = connection_manager.get_client()
             if client:
                 profile = client.get_profile()
@@ -1969,7 +1938,8 @@ def upstox_status():
                     info['profile'] = profile
                 else:
                     info['connected'] = False
-                    info['error'] = profile.get('error', 'Unknown error')
+                    info['connection_error'] = profile.get('error', 'Unknown error')
+                    info['connection_error_details'] = profile
         
         return jsonify(info)
     except Exception as e:
@@ -3115,6 +3085,327 @@ def compare_strategies():
         
     except Exception as e:
         logger.error(f"Error comparing strategies: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trading/signals', methods=['POST'])
+def get_trading_signal():
+    """
+    Get trading signal from Adaptive Elite Strategy
+    
+    Simple endpoint focused on signal accuracy
+    
+    Request body:
+    {
+        "ticker": "RELIANCE.NS"
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "ticker": "RELIANCE.NS",
+        "signal": "BUY|SELL|HOLD",
+        "confidence": 0.85,
+        "entry_price": 2450.50,
+        "stop_loss": 2383.19,
+        "target_1": 2579.75,
+        "target_2": 2702.59,
+        "current_price": 2450.50,
+        "regime_type": "STRONG_TREND",
+        "market_phase": "BULL",
+        "timestamp": "2024-01-15T10:30:00"
+    }
+    """
+    try:
+        data = request.json or {}
+        ticker = data.get('ticker')
+        
+        if not ticker:
+            return jsonify({'error': 'Ticker required'}), 400
+        
+        # Get current price
+        from src.web.data_source_manager import get_data_source_manager
+        data_manager = get_data_source_manager()
+        quote, source = data_manager.get_quote(ticker)
+        
+        if not quote:
+            return jsonify({'error': f'Could not get price for {ticker}'}), 404
+        
+        current_price = float(quote.get('last_price', quote.get('close', 0)))
+        
+        if current_price <= 0:
+            return jsonify({'error': 'Invalid price data'}), 404
+        
+        # Initialize Adaptive Elite Strategy
+        from src.web.strategies.adaptive_elite_strategy import AdaptiveEliteStrategy
+        strategy = AdaptiveEliteStrategy()
+        
+        # Execute strategy
+        result = strategy.execute({
+            'ticker': ticker,
+            'current_price': current_price
+        })
+        
+        # Extract regime info from metadata
+        regime_info = result.metadata.get('regime_info', {}) if result.metadata else {}
+        regime_type = result.metadata.get('regime_type', 'UNKNOWN') if result.metadata else 'UNKNOWN'
+        market_phase = regime_info.get('market_phase', 'NEUTRAL')
+        
+        return jsonify({
+            'status': 'success',
+            'ticker': ticker,
+            'signal': result.signal,
+            'confidence': round(result.confidence, 3),
+            'entry_price': round(result.entry_price, 2),
+            'stop_loss': round(result.stop_loss, 2),
+            'target_1': round(result.target_1, 2),
+            'target_2': round(result.target_2, 2),
+            'current_price': round(current_price, 2),
+            'regime_type': regime_type,
+            'market_phase': market_phase,
+            'trend_strength': round(regime_info.get('trend_strength', 0), 2),
+            'volatility_pct': round(regime_info.get('volatility_pct', 0), 2),
+            'strategy_used': result.metadata.get('strategy_used', 'Adaptive Elite') if result.metadata else 'Adaptive Elite',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting trading signal: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trading/signals/watchlist', methods=['GET', 'POST'])
+def get_watchlist_signals():
+    """
+    Get trading signals for all watchlist stocks
+    
+    Returns signals for all stocks in watchlist, sorted by confidence
+    
+    Response:
+    {
+        "status": "success",
+        "signals": [...],
+        "summary": {
+            "total": 5,
+            "buy_signals": 2,
+            "sell_signals": 1,
+            "hold_signals": 2
+        }
+    }
+    """
+    try:
+        # Get watchlist
+        watchlist = watchlist_manager.get_watchlist()
+        
+        if not watchlist:
+            return jsonify({
+                'status': 'success',
+                'signals': [],
+                'summary': {
+                    'total': 0,
+                    'buy_signals': 0,
+                    'sell_signals': 0,
+                    'hold_signals': 0
+                },
+                'message': 'Watchlist is empty'
+            })
+        
+        # Get signals for each ticker
+        from src.web.strategies.adaptive_elite_strategy import AdaptiveEliteStrategy
+        from src.web.data_source_manager import get_data_source_manager
+        
+        strategy = AdaptiveEliteStrategy()
+        data_manager = get_data_source_manager()
+        signals = []
+        
+        for ticker in watchlist:
+            try:
+                # Get current price
+                quote, source = data_manager.get_quote(ticker)
+                if not quote:
+                    continue
+                
+                current_price = float(quote.get('last_price', quote.get('close', 0)))
+                if current_price <= 0:
+                    continue
+                
+                # Get signal
+                result = strategy.execute({
+                    'ticker': ticker,
+                    'current_price': current_price
+                })
+                
+                # Extract regime info
+                regime_info = result.metadata.get('regime_info', {}) if result.metadata else {}
+                regime_type = result.metadata.get('regime_type', 'UNKNOWN') if result.metadata else 'UNKNOWN'
+                market_phase = regime_info.get('market_phase', 'NEUTRAL')
+                
+                signals.append({
+                    'ticker': ticker,
+                    'signal': result.signal,
+                    'confidence': round(result.confidence, 3),
+                    'current_price': round(current_price, 2),
+                    'entry_price': round(result.entry_price, 2),
+                    'stop_loss': round(result.stop_loss, 2),
+                    'target_1': round(result.target_1, 2),
+                    'target_2': round(result.target_2, 2),
+                    'regime_type': regime_type,
+                    'market_phase': market_phase,
+                    'trend_strength': round(regime_info.get('trend_strength', 0), 2),
+                    'volatility_pct': round(regime_info.get('volatility_pct', 0), 2),
+                    'strategy_used': result.metadata.get('strategy_used', 'Adaptive Elite') if result.metadata else 'Adaptive Elite',
+                    'timestamp': datetime.now().isoformat()
+                })
+                
+            except Exception as e:
+                logger.debug(f"Error getting signal for {ticker}: {e}")
+                continue
+        
+        # Sort by confidence (highest first), then by signal (BUY > SELL > HOLD)
+        signal_priority = {'BUY': 3, 'SELL': 2, 'HOLD': 1}
+        signals.sort(key=lambda x: (x['confidence'], signal_priority.get(x['signal'], 0)), reverse=True)
+        
+        # Calculate summary
+        buy_signals = sum(1 for s in signals if s['signal'] == 'BUY')
+        sell_signals = sum(1 for s in signals if s['signal'] == 'SELL')
+        hold_signals = sum(1 for s in signals if s['signal'] == 'HOLD')
+        
+        return jsonify({
+            'status': 'success',
+            'signals': signals,
+            'summary': {
+                'total': len(signals),
+                'buy_signals': buy_signals,
+                'sell_signals': sell_signals,
+                'hold_signals': hold_signals
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting watchlist signals: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/trading/signals/all-stocks', methods=['GET'])
+def get_all_stocks_signals():
+    """
+    Get trading signals for all BSE/NSE stocks using Adaptive Elite Strategy
+    Supports pagination and filtering
+    """
+    try:
+        from src.web.data.all_stocks_list import get_all_stocks, get_major_stocks
+        
+        # Get query parameters
+        limit = int(request.args.get('limit', 50))  # Default 50 stocks per request
+        offset = int(request.args.get('offset', 0))
+        signal_filter = request.args.get('signal', None)  # 'BUY', 'SELL', 'HOLD', or None for all
+        min_confidence = float(request.args.get('min_confidence', 0.0))
+        use_major_only = request.args.get('major_only', 'false').lower() == 'true'
+        
+        # Get stock list
+        if use_major_only:
+            all_stocks = get_major_stocks(limit=200)  # NIFTY 50 + Next 50
+        else:
+            all_stocks = get_all_stocks()
+        
+        # Apply pagination
+        total_stocks = len(all_stocks)
+        stocks_to_process = all_stocks[offset:offset + limit]
+        
+        logger.info(f"[All Stocks Signals] Processing {len(stocks_to_process)} stocks (offset: {offset}, total: {total_stocks})")
+        
+        # Get ELITE signal generator
+        elite_generator = get_elite_signal_generator()
+        
+        signals = []
+        errors = []
+        
+        # Process stocks
+        for ticker in stocks_to_process:
+            try:
+                # Generate signal using ELITE strategy
+                signal_response = elite_generator.generate_signal(
+                    ticker=ticker,
+                    use_ensemble=True,
+                    use_multi_timeframe=True
+                )
+                
+                if 'error' in signal_response:
+                    errors.append({'ticker': ticker, 'error': signal_response.get('error')})
+                    continue
+                
+                # Apply filters
+                signal_type = signal_response.get('signal', 'HOLD')
+                confidence = signal_response.get('confidence', 0.0)
+                
+                if signal_filter and signal_type != signal_filter:
+                    continue
+                
+                if confidence < min_confidence:
+                    continue
+                
+                # Extract regime info
+                regime_info = signal_response.get('regime_info', {})
+                regime_type = signal_response.get('regime_type', 'UNKNOWN')
+                market_phase = regime_info.get('market_phase', 'NEUTRAL') if isinstance(regime_info, dict) else 'NEUTRAL'
+                
+                signals.append({
+                    'ticker': ticker,
+                    'signal': signal_type,
+                    'confidence': round(confidence, 3),
+                    'current_price': round(signal_response.get('current_price', 0), 2),
+                    'entry_price': round(signal_response.get('entry_price', 0), 2),
+                    'stop_loss': round(signal_response.get('stop_loss', 0), 2),
+                    'target_1': round(signal_response.get('target_1', 0), 2),
+                    'target_2': round(signal_response.get('target_2', 0), 2),
+                    'regime_type': regime_type,
+                    'market_phase': market_phase,
+                    'trend_strength': round(regime_info.get('trend_strength', 0), 2) if isinstance(regime_info, dict) else 0,
+                    'volatility_pct': round(regime_info.get('volatility_pct', 0), 2) if isinstance(regime_info, dict) else 0,
+                    'strategy_used': 'Adaptive Elite',
+                    'timestamp': signal_response.get('timestamp', datetime.now().isoformat())
+                })
+                
+            except Exception as e:
+                logger.debug(f"Error getting signal for {ticker}: {e}")
+                errors.append({'ticker': ticker, 'error': str(e)})
+                continue
+        
+        # Sort by confidence (highest first), then by signal (BUY > SELL > HOLD)
+        signal_priority = {'BUY': 3, 'SELL': 2, 'HOLD': 1}
+        signals.sort(key=lambda x: (x['confidence'], signal_priority.get(x['signal'], 0)), reverse=True)
+        
+        # Calculate summary
+        buy_signals = sum(1 for s in signals if s['signal'] == 'BUY')
+        sell_signals = sum(1 for s in signals if s['signal'] == 'SELL')
+        hold_signals = sum(1 for s in signals if s['signal'] == 'HOLD')
+        
+        return jsonify({
+            'status': 'success',
+            'signals': signals,
+            'pagination': {
+                'offset': offset,
+                'limit': limit,
+                'total': total_stocks,
+                'returned': len(signals),
+                'has_more': (offset + limit) < total_stocks
+            },
+            'summary': {
+                'total': len(signals),
+                'buy_signals': buy_signals,
+                'sell_signals': sell_signals,
+                'hold_signals': hold_signals
+            },
+            'errors': errors[:10] if errors else []  # Return first 10 errors for debugging
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting all stocks signals: {e}", exc_info=True)
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

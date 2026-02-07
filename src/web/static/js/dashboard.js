@@ -265,11 +265,19 @@ async function startWebSocketStream() {
             marketDataWS.subscribe(watchlist);
             
             // Also start stream on server side
-            await fetch('/api/market/start_stream', {
+            const streamResponse = await fetch('/api/market/start_stream', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({tickers: watchlist})
             });
+            
+            if (!streamResponse.ok) {
+                const errorData = await streamResponse.json().catch(() => ({}));
+                console.error('Error starting market stream:', errorData.error || streamResponse.statusText);
+                if (errorData.message) {
+                    console.error('Details:', errorData.message);
+                }
+            }
         }
     } catch (error) {
         console.error('Error starting WebSocket stream:', error);
@@ -990,11 +998,9 @@ async function connectUpstox() {
             // Show helpful hints with exact redirect URI
             if (errorMsg.includes('redirect') || errorMsg.includes('URI') || errorMsg.includes('mismatch')) {
                 setTimeout(() => {
-                    const redirectUri = result.redirect_uri || redirectUri || 'http://localhost:5000/callback';
-                    showNotification(
-                        `💡 Tip: Add this EXACT redirect URI in Upstox Portal:\n${redirectUri}\n\nPortal: https://account.upstox.com/developer/apps`,
-                        'info'
-                    );
+                    const redirectUri = result.redirect_uri || 'http://localhost:5000/callback';
+                    const tipMessage = `💡 Tip: Add this EXACT redirect URI in Upstox Portal: ${redirectUri}\nPortal: https://account.upstox.com/developer/apps`;
+                    showNotification(tipMessage, 'warning', 10000); // Show for 10 seconds
                 }, 2000);
             }
         }
@@ -1017,10 +1023,8 @@ async function connectUpstox() {
             setTimeout(() => {
                 const redirectInput = document.getElementById('redirect-uri');
                 const redirectUri = redirectInput?.value || 'http://localhost:5000/callback';
-                showNotification(
-                    `💡 Tip: Add this EXACT redirect URI in Upstox Portal:\n${redirectUri}\n\nPortal: https://account.upstox.com/developer/apps`,
-                    'info'
-                );
+                const tipMessage = `💡 Tip: Add this EXACT redirect URI in Upstox Portal: ${redirectUri}\nPortal: https://account.upstox.com/developer/apps`;
+                showNotification(tipMessage, 'warning', 10000); // Show for 10 seconds
             }, 2000);
         }
     } finally {

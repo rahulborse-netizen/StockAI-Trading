@@ -1,0 +1,110 @@
+"""
+Comprehensive list of BSE and NSE stocks for signal generation
+Includes NIFTY 500 stocks + major BSE stocks
+"""
+
+# NIFTY 50 stocks (Top 50 by market cap)
+NIFTY_50 = [
+    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'HINDUNILVR.NS',
+    'ICICIBANK.NS', 'BHARTIARTL.NS', 'SBIN.NS', 'BAJFINANCE.NS', 'LICI.NS',
+    'ITC.NS', 'LT.NS', 'HCLTECH.NS', 'AXISBANK.NS', 'MARUTI.NS',
+    'KOTAKBANK.NS', 'ASIANPAINT.NS', 'TITAN.NS', 'ULTRACEMCO.NS', 'NTPC.NS',
+    'SUNPHARMA.NS', 'ONGC.NS', 'NESTLEIND.NS', 'POWERGRID.NS', 'M&M.NS',
+    'WIPRO.NS', 'COALINDIA.NS', 'TECHM.NS', 'TATAMOTORS.NS', 'JSWSTEEL.NS',
+    'ADANIENT.NS', 'ADANIPORTS.NS', 'TATASTEEL.NS', 'DIVISLAB.NS', 'BAJAJFINSV.NS',
+    'GRASIM.NS', 'CIPLA.NS', 'HDFCLIFE.NS', 'APOLLOHOSP.NS', 'SBILIFE.NS',
+    'EICHERMOT.NS', 'BRITANNIA.NS', 'HEROMOTOCO.NS', 'BPCL.NS', 'INDUSINDBK.NS',
+    'DRREDDY.NS', 'ADANIGREEN.NS', 'HINDALCO.NS', 'TATACONSUM.NS', 'VEDL.NS'
+]
+
+# NIFTY Next 50 (51-100)
+NIFTY_NEXT_50 = [
+    'PIDILITIND.NS', 'MARICO.NS', 'GODREJCP.NS', 'DABUR.NS', 'COLPAL.NS',
+    'HAVELLS.NS', 'BERGEPAINT.NS', 'VOLTAS.NS', 'WHIRLPOOL.NS', 'CROMPTON.NS',
+    'AMBUJACEM.NS', 'ACC.NS', 'SHREECEM.NS', 'RAMCOCEM.NS', 'JKCEMENT.NS',
+    'INDIGO.NS', 'INTERGLOBE.NS', 'SPICEJET.NS', 'JETAIRWAYS.NS', 'VISTARA.NS',
+    'ZOMATO.NS', 'SWIGGY.NS', 'PAYTM.NS', 'POLICYBZR.NS', 'NAUKRI.NS',
+    'INFOEDGE.NS', 'JUSTDIAL.NS', 'MAKEMYTRIP.NS', 'YATRA.NS', 'IXIGO.NS',
+    'FINOLEX.NS', 'ASTERDM.NS', 'FORTIS.NS', 'MAXHEALTH.NS', 'NARAYANA.NS',
+    'APOLLO.NS', 'LALPATHLAB.NS', 'METROHEALTH.NS', 'RAINBOW.NS', 'STARHEALTH.NS',
+    'HDFCAMC.NS', 'NIPPON.NS', 'FRANKLIN.NS', 'ICICIPRULI.NS', 'BAJAJHOLD.NS',
+    'GODREJ.NS', 'EMAMILTD.NS', 'DALBHARAT.NS', 'ULTRATECH.NS', 'SHREECEM.NS'
+]
+
+# NIFTY Midcap 150 (Major midcaps)
+NIFTY_MIDCAP_150 = [
+    'ALKEM.NS', 'AUBANK.NS', 'BANKBARODA.NS', 'BATAINDIA.NS', 'BEL.NS',
+    'CANBK.NS', 'CHOLAFIN.NS', 'CUMMINSIND.NS', 'ESCORTS.NS', 'EXIDEIND.NS',
+    'FEDERALBNK.NS', 'GODREJPROP.NS', 'IDFCFIRSTB.NS', 'INDIANB.NS', 'IOB.NS',
+    'JINDALSAW.NS', 'JKCEMENT.NS', 'JSWENERGY.NS', 'KAJARIACER.NS', 'L&TFH.NS',
+    'LICHSGFIN.NS', 'MANAPPURAM.NS', 'MCDOWELL-N.NS', 'MFSL.NS', 'MRF.NS',
+    'NHPC.NS', 'OBEROIRLTY.NS', 'OFSS.NS', 'PAGEIND.NS', 'PEL.NS',
+    'PETRONET.NS', 'PNB.NS', 'POLICYBZR.NS', 'RBLBANK.NS', 'RECLTD.NS',
+    'SAIL.NS', 'SIEMENS.NS', 'SRF.NS', 'SUNDARMFIN.NS', 'SUZLON.NS',
+    'TATACOMM.NS', 'TATAPOWER.NS', 'TORNTPHARM.NS', 'TVSMOTOR.NS', 'UNIONBANK.NS',
+    'UPL.NS', 'VEDL.NS', 'YESBANK.NS', 'ZEEL.NS', 'ZYDUSLIFE.NS'
+]
+
+# NIFTY Smallcap 250 (Major smallcaps)
+NIFTY_SMALLCAP_250 = [
+    'AARTIIND.NS', 'ABFRL.NS', 'ADANITRANS.NS', 'AEGISCHEM.NS', 'AFFLE.NS',
+    'ALKYLAMINES.NS', 'AMARAJABAT.NS', 'ANANTRAJ.NS', 'APAR.NS', 'APLAPOLLO.NS',
+    'APTUS.NS', 'ASAHIINDIA.NS', 'ASHOKLEY.NS', 'ASTEC.NS', 'ASTRAL.NS',
+    'ATUL.NS', 'AURIONPRO.NS', 'AUTOAXLES.NS', 'AVANTI.NS', 'BALKRISIND.NS',
+    'BALRAMCHIN.NS', 'BANDHANBNK.NS', 'BASF.NS', 'BEML.NS', 'BHARATFORG.NS',
+    'BIOCON.NS', 'BLUEDART.NS', 'BOSCHLTD.NS', 'BRIGADE.NS', 'BSOFT.NS',
+    'CAMS.NS', 'CANFINHOME.NS', 'CARBORUNIV.NS', 'CASTROLIND.NS', 'CCL.NS',
+    'CENTRALBK.NS', 'CENTURYPLY.NS', 'CESC.NS', 'CHAMBLFERT.NS', 'CHEMCON.NS',
+    'CHENNPETRO.NS', 'CHOLAFIN.NS', 'CIPLA.NS', 'CLEAN.NS', 'COCHINSHIP.NS',
+    'CONCOR.NS', 'COROMANDEL.NS', 'CROMPTON.NS', 'CYIENT.NS', 'DABUR.NS'
+]
+
+# Major BSE stocks
+BSE_MAJOR_STOCKS = [
+    'RELIANCE.BO', 'TCS.BO', 'HDFCBANK.BO', 'INFY.BO', 'HINDUNILVR.BO',
+    'ICICIBANK.BO', 'BHARTIARTL.BO', 'SBIN.BO', 'BAJFINANCE.BO', 'ITC.BO',
+    'LT.BO', 'HCLTECH.BO', 'AXISBANK.BO', 'MARUTI.BO', 'KOTAKBANK.BO',
+    'ASIANPAINT.BO', 'TITAN.BO', 'ULTRACEMCO.BO', 'NTPC.BO', 'SUNPHARMA.BO',
+    'ONGC.BO', 'NESTLEIND.BO', 'POWERGRID.BO', 'M&M.BO', 'WIPRO.BO',
+    'COALINDIA.BO', 'TECHM.BO', 'TATAMOTORS.BO', 'JSWSTEEL.BO', 'ADANIENT.BO'
+]
+
+# Combine all stocks (prioritize NSE, avoid duplicates)
+ALL_STOCKS = []
+
+# Add NIFTY 50
+ALL_STOCKS.extend(NIFTY_50)
+
+# Add NIFTY Next 50 (avoid duplicates)
+for stock in NIFTY_NEXT_50:
+    if stock not in ALL_STOCKS:
+        ALL_STOCKS.append(stock)
+
+# Add NIFTY Midcap 150 (avoid duplicates)
+for stock in NIFTY_MIDCAP_150:
+    if stock not in ALL_STOCKS:
+        ALL_STOCKS.append(stock)
+
+# Add NIFTY Smallcap 250 (avoid duplicates, limit to first 100 for performance)
+for stock in NIFTY_SMALLCAP_250[:100]:
+    if stock not in ALL_STOCKS:
+        ALL_STOCKS.append(stock)
+
+# Total: ~300 stocks (NIFTY 50 + Next 50 + Midcap 150 + 100 Smallcap)
+# This provides comprehensive coverage while maintaining performance
+
+def get_all_stocks():
+    """Get comprehensive list of all BSE/NSE stocks"""
+    return ALL_STOCKS.copy()
+
+def get_nifty_50():
+    """Get NIFTY 50 stocks"""
+    return NIFTY_50.copy()
+
+def get_nifty_next_50():
+    """Get NIFTY Next 50 stocks"""
+    return NIFTY_NEXT_50.copy()
+
+def get_major_stocks(limit=100):
+    """Get major stocks (NIFTY 50 + Next 50)"""
+    return (NIFTY_50 + NIFTY_NEXT_50)[:limit]
