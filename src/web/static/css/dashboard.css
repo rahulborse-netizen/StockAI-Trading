@@ -114,10 +114,20 @@ form textarea {
 
 .nav-container {
     display: flex;
+    flex-direction: column;
     justify-content: space-between;
-    align-items: center;
+    align-items: stretch;
     max-width: 1920px;
     margin: 0 auto;
+    position: relative;
+    z-index: 1001; /* Above navbar */
+}
+
+.nav-container > div:first-child {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
 }
 
 .nav-brand {

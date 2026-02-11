@@ -44,6 +44,22 @@ document.addEventListener('DOMContentLoaded', function() {
     updateStats();
     updatePortfolioSummary();
     
+    // Initialize auto trading card visibility
+    const savedAutoTrading = localStorage.getItem('autoTradingCardVisible');
+    if (savedAutoTrading === 'true') {
+        setTimeout(() => {
+            autoTradingCardVisible = true;
+            const card = document.getElementById('auto-trading-card');
+            const btn = document.getElementById('auto-trading-toggle-btn');
+            if (card) card.style.display = 'block';
+            if (btn) btn.classList.add('active');
+            updateAutoTradingStatus();
+            if (!autoTradingStatusInterval) {
+                autoTradingStatusInterval = setInterval(updateAutoTradingStatus, 3000);
+            }
+        }, 500);
+    }
+    
     // Fallback: Auto-refresh prices every 30 seconds if WebSocket fails
     priceUpdateInterval = setInterval(() => {
         if (!marketDataWS || !marketDataWS.isConnected()) {
@@ -807,6 +823,15 @@ function showUpstoxModal() {
 }
 
 // Connect Upstox
+// Update API key preview in modal
+function updateApiKeyPreview() {
+    const apiKey = document.getElementById('api-key')?.value || '';
+    const preview = document.getElementById('api-key-preview');
+    if (preview) {
+        preview.textContent = apiKey ? (apiKey.substring(0, 8) + '...') : 'your key';
+    }
+}
+
 async function connectUpstox() {
     const apiKeyEl = document.getElementById('api-key');
     const apiSecretEl = document.getElementById('api-secret');
@@ -853,16 +878,18 @@ async function connectUpstox() {
         const authBox = document.getElementById('upstox-auth-box');
         if (authBox) authBox.style.display = 'none';
 
-        // Add timeout to fetch request (30 seconds for OAuth flow)
+        // Add timeout to fetch request (30 seconds - OAuth flow should be instant, connection test is 10s)
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
             console.warn('[TIMEOUT] Connection request taking too long, aborting...');
             console.warn('[TIMEOUT] This might indicate:');
-            console.warn('[TIMEOUT] 1. Flask server is not responding');
-            console.warn('[TIMEOUT] 2. Network issue');
-            console.warn('[TIMEOUT] 3. Server error (check Flask terminal)');
+            console.warn('[TIMEOUT] 1. Redirect URI mismatch (most common cause)');
+            console.warn('[TIMEOUT] 2. Upstox API is slow');
+            console.warn('[TIMEOUT] 3. Network issue');
+            console.warn('[TIMEOUT] 4. Server error (check Flask terminal)');
+            console.warn('[TIMEOUT] Expected redirect URI: ' + redirectUri);
             controller.abort();
-        }, 30000);  // Increased to 30 seconds
+        }, 30000);  // 30 seconds should be enough (OAuth is instant, connection test is 10s max)
         
         let response;
         try {
@@ -1009,22 +1036,24 @@ async function connectUpstox() {
         
         let errorMsg = 'Connection failed';
         if (error.name === 'AbortError') {
-            errorMsg = 'Connection timeout - Request took too long. This might be due to:\n1. Upstox API is slow\n2. Network issues\n3. Redirect URI mismatch\n\nPlease check your redirect URI in Upstox Portal and try again.';
+            const redirectInput = document.getElementById('redirect-uri');
+            const redirectUri = redirectInput?.value || 'http://localhost:5000/callback';
+            errorMsg = `Connection timeout - Request took too long.\n\nMost common cause: Redirect URI mismatch\n\n✅ Verify in Upstox Portal:\n1. Go to: https://account.upstox.com/developer/apps\n2. Find your app (API Key: ${apiKey.substring(0, 8)}...)\n3. Add this EXACT redirect URI:\n   ${redirectUri}\n4. Save and try connecting again\n\nNote: The URI must match EXACTLY (including http:// and /callback)`;
         } else if (error.message.includes('fetch')) {
             errorMsg = `Network error: ${error.message}. Make sure the server is running on port 5000.`;
         } else {
             errorMsg = `Error: ${error.message}`;
         }
         
-        showNotification(`❌ ${errorMsg}`, 'error');
+        showNotification(`❌ ${errorMsg}`, 'error', 15000); // Show longer for timeout errors
         
         // Show helpful hints with exact redirect URI
         if (error.name === 'AbortError') {
             setTimeout(() => {
                 const redirectInput = document.getElementById('redirect-uri');
                 const redirectUri = redirectInput?.value || 'http://localhost:5000/callback';
-                const tipMessage = `💡 Tip: Add this EXACT redirect URI in Upstox Portal: ${redirectUri}\nPortal: https://account.upstox.com/developer/apps`;
-                showNotification(tipMessage, 'warning', 10000); // Show for 10 seconds
+                const tipMessage = `💡 Quick Fix: Copy this EXACT URI to Upstox Portal:\n${redirectUri}\n\nPortal: https://account.upstox.com/developer/apps`;
+                showNotification(tipMessage, 'warning', 12000);
             }, 2000);
         }
     } finally {
@@ -1665,3 +1694,240 @@ function updatePositionsPnL(instrumentKey, currentPrice) {
         console.error('Error updating positions P&L:', error);
     }
 }
+
+// Auto Trading Controls
+let autoTradingStatusInterval = null;
+let autoTradingCardVisible = false;
+
+function toggleAutoTrading() {
+    const card = document.getElementById('auto-trading-card');
+    const btn = document.getElementById('auto-trading-toggle-btn');
+    const label = document.getElementById('auto-trading-label');
+    
+    if (!card) return;
+    
+    autoTradingCardVisible = !autoTradingCardVisible;
+    card.style.display = autoTradingCardVisible ? 'block' : 'none';
+    
+    if (autoTradingCardVisible) {
+        btn.classList.add('active');
+        updateAutoTradingStatus();
+        if (!autoTradingStatusInterval) {
+            autoTradingStatusInterval = setInterval(updateAutoTradingStatus, 3000);
+        }
+    } else {
+        btn.classList.remove('active');
+        if (autoTradingStatusInterval) {
+            clearInterval(autoTradingStatusInterval);
+            autoTradingStatusInterval = null;
+        }
+    }
+}
+
+async function startAutoTrading() {
+    try {
+        const response = await fetch('/api/auto-trading/start', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showNotification(data.message || 'Auto trading started', 'success');
+            updateAutoTradingStatus();
+        } else {
+            showNotification(data.message || data.error || 'Failed to start', 'error');
+        }
+    } catch (error) {
+        showNotification('Error starting auto trading: ' + error.message, 'error');
+    }
+}
+
+async function stopAutoTrading() {
+    if (!confirm('Stop auto trading? This will halt all automated trading activities.')) {
+        return;
+    }
+    try {
+        const response = await fetch('/api/auto-trading/stop', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showNotification(data.message || 'Auto trading stopped', 'success');
+            updateAutoTradingStatus();
+        } else {
+            showNotification(data.message || data.error || 'Failed to stop', 'error');
+        }
+    } catch (error) {
+        showNotification('Error stopping auto trading: ' + error.message, 'error');
+    }
+}
+
+async function pauseAutoTrading() {
+    try {
+        const response = await fetch('/api/auto-trading/pause', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showNotification(data.message || 'Auto trading paused', 'warning');
+            updateAutoTradingStatus();
+        } else {
+            showNotification(data.message || data.error || 'Failed to pause', 'error');
+        }
+    } catch (error) {
+        showNotification('Error pausing auto trading: ' + error.message, 'error');
+    }
+}
+
+async function updateAutoTradingStatus() {
+    try {
+        const response = await fetch('/api/auto-trading/status');
+        const data = await response.json();
+        
+        if (!data) return;
+        
+        const isRunning = data.is_running || false;
+        const indicator = document.getElementById('auto-trading-status-indicator');
+        const statusText = document.getElementById('auto-trading-status-text');
+        const icon = document.getElementById('auto-trading-icon');
+        const label = document.getElementById('auto-trading-label');
+        const btnStart = document.getElementById('btn-auto-start');
+        const btnPause = document.getElementById('btn-auto-pause');
+        const btnStop = document.getElementById('btn-auto-stop');
+        
+        if (indicator && statusText) {
+            if (isRunning) {
+                indicator.querySelector('i').style.color = '#28a745';
+                statusText.textContent = 'Running';
+                if (icon) icon.style.color = '#28a745';
+                if (label) label.textContent = 'Auto: ON';
+                if (btnStart) btnStart.style.display = 'none';
+                if (btnPause) btnPause.style.display = 'inline-block';
+                if (btnStop) btnStop.style.display = 'inline-block';
+            } else {
+                indicator.querySelector('i').style.color = '#dc3545';
+                statusText.textContent = 'Stopped';
+                if (icon) icon.style.color = '#dc3545';
+                if (label) label.textContent = 'Auto: OFF';
+                if (btnStart) btnStart.style.display = 'inline-block';
+                if (btnPause) btnPause.style.display = 'none';
+                if (btnStop) btnStop.style.display = 'none';
+            }
+        }
+        
+        // Update metrics
+        const signalsEl = document.getElementById('auto-trading-signals');
+        const executedEl = document.getElementById('auto-trading-executed');
+        const accuracyEl = document.getElementById('auto-trading-accuracy');
+        const winrateEl = document.getElementById('auto-trading-winrate');
+        const positionsEl = document.getElementById('auto-trading-positions');
+        const signalSourceEl = document.getElementById('auto-trading-signal-source');
+        const confidenceEl = document.getElementById('auto-trading-confidence');
+        
+        if (signalsEl) signalsEl.textContent = data.signals_generated || 0;
+        if (executedEl) executedEl.textContent = data.executed_signals_count || 0;
+        if (accuracyEl) {
+            const acc = data.accuracy_30d;
+            accuracyEl.textContent = acc != null ? acc.toFixed(1) + '%' : '—';
+        }
+        if (winrateEl) {
+            const wr = data.win_rate_30d;
+            winrateEl.textContent = wr != null ? wr.toFixed(1) + '%' : '—';
+        }
+        if (positionsEl) positionsEl.textContent = data.open_positions || 0;
+        if (signalSourceEl) {
+            const src = (data.signal_source || 'elite').toUpperCase();
+            signalSourceEl.textContent = src === 'QUANT_ENSEMBLE' ? 'QUANT (All)' : src;
+        }
+        if (confidenceEl) {
+            confidenceEl.textContent = (data.confidence_threshold || 0.70).toFixed(2);
+        }
+    } catch (error) {
+        console.error('Error updating auto trading status:', error);
+    }
+}
+
+// Verify Redirect URI format
+async function verifyRedirectURI() {
+    const apiKey = document.getElementById('api-key')?.value || '';
+    const redirectUri = document.getElementById('redirect-uri')?.value || 'http://localhost:5000/callback';
+    
+    try {
+        const response = await fetch('/api/upstox/verify-redirect-uri', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({redirect_uri: redirectUri, api_key: apiKey})
+        });
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            let msg = '✅ Redirect URI format is valid!\n\n';
+            msg += 'Next steps:\n';
+            msg += `1. Go to: ${result.instructions.step1}\n`;
+            msg += `2. ${result.instructions.step2}\n`;
+            msg += `3. ${result.instructions.step3}\n`;
+            msg += `4. ${result.instructions.step4}\n`;
+            msg += `   ${result.instructions.redirect_uri}\n`;
+            msg += `5. ${result.instructions.step5}\n`;
+            msg += `6. ${result.instructions.step6}\n`;
+            showNotification(msg, 'success', 15000);
+        } else {
+            showNotification(`❌ ${result.message}`, 'error');
+        }
+    } catch (error) {
+        showNotification('Error verifying redirect URI: ' + error.message, 'error');
+    }
+}
+
+// Copy to clipboard helper
+function copyToClipboard(text, element) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            const original = element.textContent;
+            element.textContent = '✓ Copied!';
+            element.style.background = '#d1fae5';
+            setTimeout(() => {
+                element.textContent = original;
+                element.style.background = '#fff';
+            }, 2000);
+        }).catch(() => {
+            fallbackCopy(text, element);
+        });
+    } else {
+        fallbackCopy(text, element);
+    }
+}
+
+function fallbackCopy(text, element) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        const original = element.textContent;
+        element.textContent = '✓ Copied!';
+        element.style.background = '#d1fae5';
+        setTimeout(() => {
+            element.textContent = original;
+            element.style.background = '#fff';
+        }, 2000);
+    } catch (err) {
+        showNotification('Failed to copy. Please copy manually: ' + text, 'warning');
+    }
+    document.body.removeChild(textarea);
+}
+
+// Make functions globally available and override toggle to save state
+(function() {
+    window.toggleAutoTrading = toggleAutoTrading;
+    window.startAutoTrading = startAutoTrading;
+    window.stopAutoTrading = stopAutoTrading;
+    window.pauseAutoTrading = pauseAutoTrading;
+    window.updateAutoTradingStatus = updateAutoTradingStatus;
+    window.verifyRedirectURI = verifyRedirectURI;
+    window.copyToClipboard = copyToClipboard;
+    window.updateApiKeyPreview = updateApiKeyPreview;
+    
+    // Override toggle to save state
+    const originalToggle = toggleAutoTrading;
+    window.toggleAutoTrading = function() {
+        originalToggle();
+        localStorage.setItem('autoTradingCardVisible', autoTradingCardVisible.toString());
+    };
+})();

@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Signals | AI Trading Platform</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .signals-container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .signals-card {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+        .header-section {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .header-section h1 {
+            color: #2d3748;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        .header-section p {
+            color: #718096;
+            font-size: 1.1rem;
+        }
+        .search-section {
+            background: #f7fafc;
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+        }
+        .stock-input-group {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .stock-input {
+            flex: 1;
+            min-width: 250px;
+        }
+        .stock-input input {
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+            padding: 12px 20px;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+        .stock-input input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        .btn-search {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 40px;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .btn-search:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        .btn-search:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .options-group {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        .signals-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
+            gap: 25px;
+            margin-top: 30px;
+        }
+        .signal-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+            border-left: 5px solid;
+        }
+        .signal-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        .signal-card.buy {
+            border-left-color: #48bb78;
+        }
+        .signal-card.sell {
+            border-left-color: #f56565;
+        }
+        .signal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .signal-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #2d3748;
+        }
+        .signal-action {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .signal-action.buy {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .signal-action.sell {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+        .signal-section {
+            margin-bottom: 20px;
+        }
+        .signal-section h4 {
+            font-size: 0.9rem;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .price-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .price-row:last-child {
+            border-bottom: none;
+        }
+        .price-label {
+            color: #4a5568;
+            font-weight: 500;
+        }
+        .price-value {
+            font-weight: 700;
+            color: #2d3748;
+        }
+        .price-value.positive {
+            color: #48bb78;
+        }
+        .price-value.negative {
+            color: #f56565;
+        }
+        .indicator-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .indicator-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            background: #f7fafc;
+            border-radius: 6px;
+        }
+        .indicator-label {
+            font-size: 0.85rem;
+            color: #718096;
+        }
+        .indicator-value {
+            font-weight: 600;
+            color: #2d3748;
+        }
+        .loading-spinner {
+            text-align: center;
+            padding: 60px;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px;
+            color: #718096;
+        }
+        .empty-state i {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            color: #cbd5e0;
+        }
+        .confidence-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .confidence-badge.high {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .confidence-badge.medium {
+            background: #feebc8;
+            color: #7c2d12;
+        }
+        .confidence-badge.low {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+        .error-message {
+            background: #fed7d7;
+            color: #742a2a;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        @media (max-width: 768px) {
+            .signals-grid {
+                grid-template-columns: 1fr;
+            }
+            .stock-input-group {
+                flex-direction: column;
+            }
+            .stock-input {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="signals-container">
+        <div class="signals-card">
+            <div class="header-section">
+                <h1><i class="fas fa-chart-line"></i> Trading Signals</h1>
+                <p>Enter stock names to get real-time buy/sell signals with entry prices, targets, and stop loss</p>
+            </div>
+
+            <div class="search-section">
+                <div class="stock-input-group">
+                    <div class="stock-input">
+                        <input type="text" 
+                               id="stockInput" 
+                               class="form-control" 
+                               placeholder="Enter stock names (e.g., RELIANCE TCS INFY NIFTY BANKNIFTY)"
+                               onkeypress="handleEnterKey(event)">
+                    </div>
+                    <button class="btn-search" onclick="getSignals()" id="searchBtn">
+                        <i class="fas fa-search"></i> Get Signals
+                    </button>
+                </div>
+                <div class="options-group" style="margin-top: 20px;">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="intradayCheck">
+                        <label for="intradayCheck">Intraday Trading</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <label for="confidenceSlider">Min Confidence:</label>
+                        <input type="range" id="confidenceSlider" min="0" max="100" value="55" style="width: 150px;">
+                        <span id="confidenceValue">55%</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="errorMessage" style="display: none;"></div>
+            <div id="loadingSpinner" style="display: none;">
+                <div class="loading-spinner">
+                    <div class="spinner"></div>
+                    <p>Analyzing stocks and generating signals...</p>
+                </div>
+            </div>
+            <div id="signalsContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        // Update confidence display
+        document.getElementById('confidenceSlider').addEventListener('input', function(e) {
+            document.getElementById('confidenceValue').textContent = e.target.value + '%';
+        });
+
+        // Handle Enter key
+        function handleEnterKey(event) {
+            if (event.key === 'Enter') {
+                getSignals();
+            }
+        }
+
+        async function getSignals() {
+            const stockInput = document.getElementById('stockInput');
+            const stocks = stockInput.value.trim().split(/\s+/).filter(s => s.length > 0);
+            
+            if (stocks.length === 0) {
+                showError('Please enter at least one stock name');
+                return;
+            }
+
+            const intraday = document.getElementById('intradayCheck').checked;
+            const minConfidence = document.getElementById('confidenceSlider').value / 100;
+
+            // Show loading
+            document.getElementById('loadingSpinner').style.display = 'block';
+            document.getElementById('signalsContainer').innerHTML = '';
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('searchBtn').disabled = true;
+
+            try {
+                const response = await fetch('/api/trading-signals', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        stocks: stocks,
+                        intraday: intraday,
+                        min_confidence: minConfidence
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'error') {
+                    showError(data.message || 'Error fetching signals');
+                    return;
+                }
+
+                displaySignals(data.signals || []);
+
+            } catch (error) {
+                showError('Network error: ' + error.message);
+            } finally {
+                document.getElementById('loadingSpinner').style.display = 'none';
+                document.getElementById('searchBtn').disabled = false;
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.innerHTML = `<div class="error-message"><i class="fas fa-exclamation-circle"></i> ${message}</div>`;
+            errorDiv.style.display = 'block';
+        }
+
+        function displaySignals(signals) {
+            const container = document.getElementById('signalsContainer');
+
+            if (signals.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-inbox"></i>
+                        <h3>No Signals Found</h3>
+                        <p>Try adjusting the confidence threshold or check stock names</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Separate buy and sell signals
+            const buySignals = signals.filter(s => s.action === 'BUY');
+            const sellSignals = signals.filter(s => s.action === 'SELL');
+
+            let html = '';
+
+            if (buySignals.length > 0) {
+                html += `<h3 style="margin-top: 30px; margin-bottom: 20px; color: #48bb78;"><i class="fas fa-arrow-up"></i> BUY Signals (${buySignals.length})</h3>`;
+                html += '<div class="signals-grid">';
+                buySignals.forEach(signal => {
+                    html += createSignalCard(signal, 'buy');
+                });
+                html += '</div>';
+            }
+
+            if (sellSignals.length > 0) {
+                html += `<h3 style="margin-top: 30px; margin-bottom: 20px; color: #f56565;"><i class="fas fa-arrow-down"></i> SELL Signals (${sellSignals.length})</h3>`;
+                html += '<div class="signals-grid">';
+                sellSignals.forEach(signal => {
+                    html += createSignalCard(signal, 'sell');
+                });
+                html += '</div>';
+            }
+
+            container.innerHTML = html;
+        }
+
+        function createSignalCard(signal, type) {
+            const confidence = Math.round(signal.confidence * 100);
+            const confidenceClass = confidence >= 70 ? 'high' : confidence >= 50 ? 'medium' : 'low';
+
+            return `
+                <div class="signal-card ${type}">
+                    <div class="signal-header">
+                        <div class="signal-title">${signal.ticker}</div>
+                        <div>
+                            <span class="signal-action ${type.toLowerCase()}">${signal.action}</span>
+                            <span class="confidence-badge ${confidenceClass}" style="margin-left: 10px;">${confidence}%</span>
+                        </div>
+                    </div>
+
+                    <div class="signal-section">
+                        <h4><i class="fas fa-coins"></i> Trade Setup</h4>
+                        <div class="price-row">
+                            <span class="price-label">${type === 'buy' ? 'Buy Price' : 'Sell Price'}:</span>
+                            <span class="price-value">₹${signal.entry_price.toFixed(2)}</span>
+                        </div>
+                        <div class="price-row">
+                            <span class="price-label">Stop Loss:</span>
+                            <span class="price-value ${signal.stop_loss_pct < 0 ? 'negative' : 'positive'}">₹${signal.stop_loss.toFixed(2)} (${signal.stop_loss_pct > 0 ? '+' : ''}${signal.stop_loss_pct.toFixed(2)}%)</span>
+                        </div>
+                    </div>
+
+                    <div class="signal-section">
+                        <h4><i class="fas fa-bullseye"></i> Profit Targets</h4>
+                        <div class="price-row">
+                            <span class="price-label">Target 1 (Quick):</span>
+                            <span class="price-value positive">₹${signal.target1.toFixed(2)} (+${signal.target1_pct.toFixed(2)}%)</span>
+                        </div>
+                        <div class="price-row">
+                            <span class="price-label">Target 2 (Medium):</span>
+                            <span class="price-value positive">₹${signal.target2.toFixed(2)} (+${signal.target2_pct.toFixed(2)}%)</span>
+                        </div>
+                        <div class="price-row">
+                            <span class="price-label">Target 3 (Long):</span>
+                            <span class="price-value positive">₹${signal.target3.toFixed(2)} (+${signal.target3_pct.toFixed(2)}%)</span>
+                        </div>
+                    </div>
+
+                    <div class="signal-section">
+                        <h4><i class="fas fa-shield-alt"></i> Risk Management</h4>
+                        <div class="price-row">
+                            <span class="price-label">Risk per Share:</span>
+                            <span class="price-value">₹${Math.abs(signal.entry_price - signal.stop_loss).toFixed(2)}</span>
+                        </div>
+                        <div class="price-row">
+                            <span class="price-label">Risk/Reward (T1):</span>
+                            <span class="price-value">${signal.risk_reward_1.toFixed(2)}:1</span>
+                        </div>
+                        <div class="price-row">
+                            <span class="price-label">Risk/Reward (T2):</span>
+                            <span class="price-value">${signal.risk_reward_2.toFixed(2)}:1</span>
+                        </div>
+                    </div>
+
+                    <div class="signal-section">
+                        <h4><i class="fas fa-chart-bar"></i> Key Indicators</h4>
+                        <div class="indicator-grid">
+                            <div class="indicator-item">
+                                <span class="indicator-label">RSI:</span>
+                                <span class="indicator-value">${signal.rsi.toFixed(1)}</span>
+                            </div>
+                            <div class="indicator-item">
+                                <span class="indicator-label">MACD:</span>
+                                <span class="indicator-value">${signal.macd.toFixed(2)}</span>
+                            </div>
+                            <div class="indicator-item">
+                                <span class="indicator-label">SMA 20:</span>
+                                <span class="indicator-value">₹${signal.sma_20.toFixed(2)}</span>
+                            </div>
+                            <div class="indicator-item">
+                                <span class="indicator-label">SMA 50:</span>
+                                <span class="indicator-value">₹${signal.sma_50.toFixed(2)}</span>
+                            </div>
+                            <div class="indicator-item">
+                                <span class="indicator-label">Support 1:</span>
+                                <span class="indicator-value">₹${signal.support1.toFixed(2)}</span>
+                            </div>
+                            <div class="indicator-item">
+                                <span class="indicator-label">Resistance 1:</span>
+                                <span class="indicator-value">₹${signal.resistance1.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    ${signal.reason ? `<div class="signal-section"><h4><i class="fas fa-lightbulb"></i> Signal Reason</h4><p style="color: #718096; font-size: 0.9rem;">${signal.reason}</p></div>` : ''}
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

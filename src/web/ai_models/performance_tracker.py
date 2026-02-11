@@ -15,14 +15,93 @@ from src.web.ai_models.model_registry import get_model_registry
 logger = logging.getLogger(__name__)
 
 
+def _normalize_ticker(ticker: str) -> str:
+    """Normalize ticker for matching (e.g. RELIANCE.NS, RELIANCE-EQ -> RELIANCE)."""
+    if not ticker:
+        return ''
+    t = str(ticker).strip().upper()
+    for suffix in ('.NS', '.BO', '.NSE', '.BSE', '-EQ', '-NSE', '-BSE'):
+        if t.endswith(suffix):
+            t = t[:-len(suffix)]
+    return t
+
+
 class PerformanceTracker:
-    """Track model performance metrics"""
+    """Track model performance metrics and pending predictions for accuracy feedback."""
     
-    def __init__(self, storage_path: str = 'data/models/performance.json'):
+    def __init__(self, storage_path: str = 'data/models/performance.json', pending_path: Optional[str] = None):
         self.storage_path = Path(storage_path)
+        self.pending_path = Path(pending_path or 'data/models/pending_predictions.json')
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        self.pending_path.parent.mkdir(parents=True, exist_ok=True)
         self.performance_history: Dict[str, List[Dict]] = {}
+        self.pending_predictions: List[Dict] = []
         self.load_history()
+        self._load_pending()
+    
+    def _load_pending(self) -> None:
+        try:
+            if self.pending_path.exists():
+                with open(self.pending_path, 'r') as f:
+                    self.pending_predictions = json.load(f)
+        except Exception as e:
+            logger.debug(f"Could not load pending predictions: {e}")
+            self.pending_predictions = []
+    
+    def _save_pending(self) -> None:
+        try:
+            with open(self.pending_path, 'w') as f:
+                json.dump(self.pending_predictions, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save pending predictions: {e}")
+    
+    def add_pending(
+        self,
+        model_id: str,
+        ticker: str,
+        prediction: float,
+        entry_price: float,
+        timestamp: Optional[datetime] = None
+    ) -> None:
+        """Store a pending prediction (call when a BUY is executed)."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        self.pending_predictions.append({
+            'model_id': model_id,
+            'ticker': _normalize_ticker(ticker),
+            'prediction': float(prediction),
+            'entry_price': float(entry_price),
+            'timestamp': timestamp.isoformat(),
+        })
+        self._save_pending()
+    
+    def resolve_pending(self, ticker: str, exit_price: float) -> bool:
+        """
+        Resolve the oldest pending prediction for this ticker (call when position is closed).
+        Computes actual_return, records via record_prediction, removes pending.
+        Returns True if a pending was resolved.
+        """
+        normalized = _normalize_ticker(ticker)
+        for i, p in enumerate(self.pending_predictions):
+            if p.get('ticker') != normalized:
+                continue
+            entry_price = float(p.get('entry_price', 0))
+            if entry_price <= 0:
+                self.pending_predictions.pop(i)
+                self._save_pending()
+                return False
+            actual_return = (exit_price - entry_price) / entry_price
+            self.record_prediction(
+                model_id=p['model_id'],
+                ticker=ticker,
+                prediction=p['prediction'],
+                actual_return=actual_return,
+                timestamp=datetime.fromisoformat(p['timestamp']) if isinstance(p.get('timestamp'), str) else None
+            )
+            self.pending_predictions.pop(i)
+            self._save_pending()
+            return True
+        return False
     
     def load_history(self) -> None:
         """Load performance history from disk"""

@@ -2,6 +2,14 @@
 Flask web application for AI Trading Algorithm
 Provides UI/UX interface for monitoring, alerts, and order execution
 """
+import sys
+import os
+
+# Add project root to Python path for imports
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from flask import Flask, render_template, jsonify, request, session
 from datetime import datetime, timedelta
 import json
@@ -9,9 +17,8 @@ import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
-import os
-import socket
 from urllib.parse import urlencode
+import requests
 
 from dotenv import load_dotenv
 
@@ -60,6 +67,7 @@ from src.web.websocket_server import init_websocket_handlers, get_ws_manager
 from src.web.trading_mode import get_trading_mode_manager
 from src.web.holdings_db import get_holdings_db
 from src.web.portfolio_recorder import get_portfolio_recorder
+from src.web.stock_universe import get_stock_universe
 
 # ELITE AI System
 from src.web.ai_models.elite_signal_generator import get_elite_signal_generator
@@ -171,6 +179,11 @@ def _get_base_url():
 def index():
     """Main dashboard"""
     return render_template('dashboard.html')
+
+@app.route('/trading-signals')
+def trading_signals():
+    """Trading signals UI page"""
+    return render_template('trading_signals.html')
 
 @app.route('/api/watchlist')
 def get_watchlist():
@@ -444,7 +457,8 @@ def get_signals(ticker):
                     use_multi_timeframe=True
                 )
                 
-                if 'error' not in signal_response:
+                # Check if signal_response is valid
+                if signal_response and 'error' not in signal_response:
                     # Generate trade plan if requested
                     if generate_plan:
                         try:
@@ -478,9 +492,12 @@ def get_signals(ticker):
                             signal_response['trade_plan_error'] = str(plan_err)
                     
                     return jsonify(signal_response)
-                else:
+                elif signal_response and 'error' in signal_response:
                     # ELITE returned an error, log it and fall through to basic
                     logger.warning(f"[Signals] ELITE system returned error: {signal_response.get('error', 'Unknown error')}")
+                else:
+                    # ELITE returned None or invalid response
+                    logger.warning(f"[Signals] ELITE system returned invalid response: {signal_response}")
             except Exception as elite_err:
                 logger.error(f"[Signals] ELITE system exception: {elite_err}", exc_info=True)
                 # Fall through to basic signal generation
@@ -717,51 +734,87 @@ def get_model_rankings():
 
 @app.route('/api/index-signals')
 def get_all_index_signals():
-    """Get trading signals for all major indices using Adaptive Elite Strategy"""
+    """Get trading signals for all major indices using Adaptive Elite Strategy with multi-timeframe support"""
+    from src.web.market_hours import get_market_hours_manager
+    from src.web.ai_models.multi_timeframe_signal import get_multi_timeframe_aggregator
+    
     indices = [
         {'name': 'Nifty 50', 'ticker': '^NSEI', 'key': 'nifty50'},
         {'name': 'Bank Nifty', 'ticker': '^NSEBANK', 'key': 'banknifty'},
-        {'name': 'Sensex', 'ticker': '^BSESN', 'key': 'sensex'}
+        {'name': 'Sensex', 'ticker': '^BSESN', 'key': 'sensex'},
+        {'name': 'Nifty 100', 'ticker': '^CNX100', 'key': 'nifty100'},
+        {'name': 'Nifty 500', 'ticker': '^CNX500', 'key': 'nifty500'},
+        {'name': 'India VIX', 'ticker': '^INDIAVIX', 'key': 'indiavix'}
     ]
+    
+    # Get timeframe parameter (default: all timeframes)
+    timeframe = request.args.get('timeframe', 'all')  # '5m', '15m', '1h', '1d', 'all'
+    timeframes = ['5m', '15m', '1h', '1d'] if timeframe == 'all' else [timeframe]
+    
+    # Check if intraday
+    market_hours = get_market_hours_manager()
+    is_intraday = market_hours.is_market_open()
     
     results = []
     elite_generator = get_elite_signal_generator()
+    multi_tf_aggregator = get_multi_timeframe_aggregator()
     
     for index in indices:
         try:
-            logger.info(f"[Index Signals] Processing {index['name']} ({index['ticker']})")
+            logger.info(f"[Index Signals] Processing {index['name']} ({index['ticker']}) - timeframes: {timeframes}")
             
-            # Use ELITE signal generator for better accuracy
-            signal_response = elite_generator.generate_signal(
-                ticker=index['ticker'],
-                use_ensemble=True,
-                use_multi_timeframe=True
-            )
+            # Use multi-timeframe aggregator for intraday support
+            if timeframe == 'all' or len(timeframes) > 1:
+                # Multi-timeframe signal
+                signal_response = multi_tf_aggregator.generate_multi_timeframe_signal(
+                    ticker=index['ticker'],
+                    timeframes=timeframes,
+                    is_intraday=is_intraday,
+                    use_ensemble=True,
+                    min_confidence=0.6
+                )
+            else:
+                # Single timeframe signal
+                signal_response = elite_generator.generate_intraday_signal(
+                    ticker=index['ticker'],
+                    timeframe=timeframes[0],
+                    use_ensemble=True
+                )
             
             if 'error' in signal_response:
-                logger.warning(f"[Index Signals] ELITE error for {index['name']}: {signal_response.get('error')}")
+                logger.warning(f"[Index Signals] Error for {index['name']}: {signal_response.get('error')}")
                 continue
             
             # Format response for index signals
-            results.append({
+            result = {
                 'index_name': index['name'],
                 'index_key': index['key'],
                 'ticker': index['ticker'],
                 'current_price': signal_response.get('current_price', 0),
-                'signal': signal_response.get('signal', 'HOLD'),
-                'probability': signal_response.get('confidence', 0.5),
+                'signal': signal_response.get('signal') or signal_response.get('consensus_signal', 'HOLD'),
+                'probability': signal_response.get('probability', signal_response.get('confidence', 0.5)),
                 'confidence': signal_response.get('confidence', 0.5),
-                'entry_level': signal_response.get('entry_price', 0),
-                'entry_price': signal_response.get('entry_price', 0),
+                'entry_level': signal_response.get('entry_level', signal_response.get('entry_price', 0)),
+                'entry_price': signal_response.get('entry_level', signal_response.get('entry_price', 0)),
                 'stop_loss': signal_response.get('stop_loss', 0),
                 'target_1': signal_response.get('target_1', 0),
                 'target_2': signal_response.get('target_2', 0),
-                'regime_type': signal_response.get('regime_type', 'UNKNOWN'),
-                'market_phase': signal_response.get('market_phase', ''),
-                'trend_strength': signal_response.get('trend_strength', ''),
-                'volatility_pct': signal_response.get('volatility_pct', 0),
+                'timeframe': timeframe,
+                'timeframes_analyzed': timeframes,
+                'is_intraday': is_intraday,
                 'timestamp': signal_response.get('timestamp', datetime.now().isoformat())
-            })
+            }
+            
+            # Add multi-timeframe details if available
+            if 'timeframe_signals' in signal_response:
+                result['timeframe_signals'] = signal_response['timeframe_signals']
+            
+            # Add volatility and other metrics
+            result['volatility'] = signal_response.get('volatility', 0)
+            result['recent_high'] = signal_response.get('recent_high', 0)
+            result['recent_low'] = signal_response.get('recent_low', 0)
+            
+            results.append(result)
         except Exception as e:
             logger.error(f"[Index Signals] Error for {index['name']}: {e}", exc_info=True)
             continue
@@ -1195,7 +1248,7 @@ def get_prices():
             for ticker in watchlist:
                 prices[ticker] = _get_cached_price(ticker)
     else:
-        # Not connected to Upstox, fetch from Yahoo Finance
+        # Not connected to Upstox, fetch from Yahoo Finance or return empty prices
         for ticker in watchlist:
             try:
                 # Try to get latest price from Yahoo Finance
@@ -1218,6 +1271,52 @@ def get_prices():
                 logger.warning(f"Error fetching Yahoo Finance price for {ticker}: {e}")
                 # Fallback to cached data
                 prices[ticker] = _get_cached_price(ticker)
+    
+    # Also handle top_stocks prices if requested (for sidebar)
+    if request.args.get('for_top_stocks') == 'true':
+        try:
+            # Get top stocks list
+            top_stocks_response = get_top_stocks()
+            top_stocks = top_stocks_response.get_json() if hasattr(top_stocks_response, 'get_json') else top_stocks_response
+            top_stocks_tickers = [s['ticker'] for s in top_stocks]
+            
+            for ticker in top_stocks_tickers:
+                if ticker not in prices:
+                    try:
+                        import yfinance as yf
+                        stock = yf.Ticker(ticker)
+                        hist = stock.history(period="2d")
+                        if not hist.empty:
+                            latest_price = float(hist['Close'].iloc[-1])
+                            prev_close = float(hist['Close'].iloc[-2]) if len(hist) > 1 else latest_price
+                            change = latest_price - prev_close
+                            change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+                            prices[ticker] = {
+                                'price': latest_price,
+                                'change': change,
+                                'change_pct': change_pct,
+                                'volume': int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0,
+                                'timestamp': datetime.now().isoformat()
+                            }
+                        else:
+                            prices[ticker] = {
+                                'price': 0,
+                                'change': 0,
+                                'change_pct': 0,
+                                'volume': 0,
+                                'error': 'No data'
+                            }
+                    except Exception as e:
+                        logger.debug(f"Error fetching price for top stock {ticker}: {e}")
+                        prices[ticker] = {
+                            'price': 0,
+                            'change': 0,
+                            'change_pct': 0,
+                            'volume': 0,
+                            'error': str(e)
+                        }
+        except Exception as e:
+            logger.warning(f"Error processing top stocks prices: {e}")
     
     return jsonify(prices)
 
@@ -1583,26 +1682,39 @@ def connect_upstox():
     logger.info(f"[Phase 1.2] Connect request - API Key: {api_key[:8]}..., Redirect URI: {redirect_uri}")
     
     try:
-        # If access token is provided directly, use it
-        if access_token:
+        # If access token is provided directly, test it first
+        # Otherwise, skip straight to OAuth flow (faster, no timeout risk)
+        if access_token and access_token.strip():
             logger.info("[Phase 1.2] Using direct access token")
             upstox_api = UpstoxAPI(api_key, api_secret, redirect_uri)
             upstox_api.set_access_token(access_token)
             connection_manager.save_connection(api_key, api_secret, redirect_uri, access_token)
             
-            # Test connection with timeout handling
-            logger.info("[Phase 1.2] Testing connection with access token...")
+            # Test connection with timeout handling (short timeout to avoid hanging)
+            logger.info("[Phase 1.2] Testing connection with access token (10s timeout)...")
             try:
-                profile = upstox_api.get_profile()
+                # Use shorter timeout for connection test to avoid hanging
+                profile = upstox_api.get_profile(timeout=10)
                 if 'error' in profile:
                     error_msg = profile.get('error', 'Unknown error')
-                    logger.error(f"[Phase 1.2] Connection test failed: {error_msg}")
+                    status_code = profile.get('status_code', 0)
+                    logger.error(f"[Phase 1.2] Connection test failed: {error_msg} (status: {status_code})")
                     connection_manager.clear_connection()
+                    
+                    # Provide specific hints based on error
+                    hint = 'Check if access token is valid and not expired. You may need to generate a new token from Upstox.'
+                    if status_code == 403 or 'Redirect URI' in error_msg or 'redirect' in error_msg.lower():
+                        hint = f'Redirect URI mismatch! Verify in Upstox Portal that this EXACT URI is added: {redirect_uri}\nPortal: https://account.upstox.com/developer/apps'
+                    elif status_code == 401:
+                        hint = 'Access token is invalid or expired. Please reconnect using the OAuth flow (leave access token empty).'
+                    
                     return jsonify({
                         'status': 'error', 
                         'message': f'Connection failed: {error_msg}',
                         'details': profile,
-                        'hint': 'Check if access token is valid and not expired. You may need to generate a new token from Upstox.'
+                        'hint': hint,
+                        'redirect_uri': redirect_uri,
+                        'upstox_portal_url': 'https://account.upstox.com/developer/apps'
                     }), 400
                 
                 logger.info("[Phase 1.2] Connection test successful")
@@ -1611,35 +1723,57 @@ def connect_upstox():
                     'message': 'Upstox connected successfully',
                     'profile': profile
                 })
-            except Exception as e:
-                logger.error(f"[Phase 1.2] Connection test exception: {e}")
+            except requests.exceptions.Timeout as e:
+                logger.error(f"[Phase 1.2] Connection test timeout: {e}")
                 connection_manager.clear_connection()
                 return jsonify({
                     'status': 'error',
-                    'message': f'Connection test failed: {str(e)}',
-                    'hint': 'This might be a network issue. Please check your internet connection and try again.'
+                    'message': f'Connection timeout - Upstox API took too long to respond',
+                    'hint': f'This might indicate:\n1. Redirect URI mismatch (most common)\n2. Network issues\n3. Upstox API is slow\n\nVerify redirect URI in Upstox Portal: {redirect_uri}\nPortal: https://account.upstox.com/developer/apps',
+                    'redirect_uri': redirect_uri,
+                    'upstox_portal_url': 'https://account.upstox.com/developer/apps'
+                }), 400
+            except Exception as e:
+                logger.error(f"[Phase 1.2] Connection test exception: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                connection_manager.clear_connection()
+                error_msg = str(e)
+                hint = 'This might be a network issue. Please check your internet connection and try again.'
+                if 'redirect' in error_msg.lower() or 'uri' in error_msg.lower():
+                    hint = f'Redirect URI issue detected. Verify in Upstox Portal: {redirect_uri}'
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Connection test failed: {error_msg}',
+                    'hint': hint,
+                    'redirect_uri': redirect_uri
                 }), 400
         
         # Otherwise, generate authorization URL for OAuth flow
         # This should be instant - no network calls, just URL building
-        logger.info("[Phase 1.2] Starting OAuth flow...")
-        logger.info(f"[Phase 1.2] Creating UpstoxAPI instance...")
+        # Skip connection test to avoid timeouts - OAuth flow is faster
+        logger.info("[CONNECT] Starting OAuth flow (no connection test - instant)...")
+        logger.info(f"[CONNECT] Creating UpstoxAPI instance...")
         upstox_api = UpstoxAPI(api_key, api_secret, redirect_uri)
-        logger.info(f"[Phase 1.2] UpstoxAPI instance created")
+        logger.info(f"[CONNECT] UpstoxAPI instance created")
         
-        logger.info(f"[Phase 1.2] Saving connection to session...")
+        logger.info(f"[CONNECT] Saving connection to session...")
         connection_manager.save_connection(api_key, api_secret, redirect_uri)
-        logger.info(f"[Phase 1.2] Connection saved to session")
+        logger.info(f"[CONNECT] Connection saved to session")
         
         # Generate authorization URL (instant - no network call)
-        logger.info(f"[Phase 1.2] Building authorization URL...")
+        logger.info(f"[CONNECT] Building authorization URL...")
+        logger.info(f"[CONNECT] Using redirect_uri: {redirect_uri}")
+        logger.info(f"[CONNECT] Using API Key: {api_key[:8]}...")
         auth_url = upstox_api.build_authorize_url()
-        logger.info(f"[Phase 1.2] Authorization URL generated: {auth_url[:100]}...")
+        logger.info(f"[CONNECT] ✅ Authorization URL generated (instant, no network call)")
+        logger.info(f"[CONNECT] Full auth URL: {auth_url[:150]}...")
+        logger.info(f"[CONNECT] ⚠️ CRITICAL: Make sure this redirect_uri is in Upstox Portal: {redirect_uri}")
         
         # Get suggested URIs (fast - no network detection)
         suggested_uris = ['http://localhost:5000/callback']  # Fast default
         
-        logger.info(f"[Phase 1.2] Returning auth_required response...")
+        logger.info(f"[CONNECT] Returning auth_required response (instant)...")
         return jsonify({
             'status': 'auth_required',
             'message': 'Authorization required',
@@ -1668,7 +1802,10 @@ def upstox_callback():
     error = request.args.get('error')
     error_description = request.args.get('error_description', '')
     
-    logger.info(f"[Phase 1.2] Callback received - Code: {'Yes' if auth_code else 'No'}, Error: {error}")
+    # Log full callback details for debugging
+    logger.info(f"[CALLBACK] Full callback URL: {request.url}")
+    logger.info(f"[CALLBACK] Query params: {dict(request.args)}")
+    logger.info(f"[CALLBACK] Code: {'Yes' if auth_code else 'No'}, Error: {error}, Description: {error_description}")
     
     if error:
         error_html = f'''
@@ -1726,30 +1863,113 @@ def upstox_callback():
         upstox_api = UpstoxAPI(api_key, api_secret, redirect_uri)
         
         # Exchange authorization code for access token
-        logger.info(f"[Phase 1.2] Attempting to authenticate with auth code: {auth_code[:10]}...")
-        logger.info(f"[Phase 1.2] Using redirect_uri: {redirect_uri}")
-        logger.info(f"[Phase 1.2] Using API Key: {api_key[:8]}...")
+        logger.info(f"[CALLBACK] Attempting authentication with code: {auth_code[:20]}...")
+        logger.info(f"[CALLBACK] Using redirect_uri: {redirect_uri}")
+        logger.info(f"[CALLBACK] Using API Key: {api_key[:8]}...")
         
-        auth_result = upstox_api.authenticate(auth_code)
-        auth_success = False
-        refresh_token = None
-        
-        if isinstance(auth_result, dict):
-            # New format: returns dict with access_token and refresh_token
-            access_token = auth_result.get('access_token')
-            refresh_token = auth_result.get('refresh_token')
-            if access_token:
-                upstox_api.set_access_token(access_token)
+        try:
+            auth_result = upstox_api.authenticate(auth_code)
+            auth_success = False
+            refresh_token = None
+            
+            if isinstance(auth_result, dict):
+                # New format: returns dict with access_token and refresh_token
+                access_token = auth_result.get('access_token')
+                refresh_token = auth_result.get('refresh_token')
+                if access_token:
+                    upstox_api.set_access_token(access_token)
+                    auth_success = True
+                    logger.info(f"[CALLBACK] ✅ Authentication successful!")
+            elif auth_result:
+                # Old format: returns True
                 auth_success = True
-        elif auth_result:
-            # Old format: returns True
-            auth_success = True
-        
-        if not auth_success:
-            logger.error(f"[Phase 1.2] Authentication failed - Invalid Credentials error")
-            logger.error(f"[Phase 1.2] This usually means redirect URI mismatch")
-            logger.error(f"[Phase 1.2] Expected redirect URI: {redirect_uri}")
-            logger.error(f"[Phase 1.2] Please verify this EXACT URI is in Upstox Portal")
+                logger.info(f"[CALLBACK] ✅ Authentication successful!")
+            
+            if not auth_success:
+                # Get detailed error from upstox_api if available
+                error_details = getattr(upstox_api, '_last_error', None) or {}
+                error_code = error_details.get('error_code', 'Unknown')
+                error_message = error_details.get('error_message', 'Authentication failed')
+                
+                logger.error(f"[CALLBACK] ❌ Authentication failed")
+                logger.error(f"[CALLBACK] Error Code: {error_code}")
+                logger.error(f"[CALLBACK] Error Message: {error_message}")
+                logger.error(f"[CALLBACK] Expected redirect URI: {redirect_uri}")
+                logger.error(f"[CALLBACK] Please verify this EXACT URI is in Upstox Portal")
+                
+                # Show detailed error page
+                error_html = f'''
+                <html>
+                <head>
+                    <title>Upstox Connection Failed</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #0f172a; color: #f1f5f9; }}
+                        .error {{ background: #ef4444; padding: 20px; border-radius: 8px; margin: 20px auto; max-width: 600px; }}
+                        .info {{ background: #1e293b; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 600px; text-align: left; }}
+                        .code {{ background: #000; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; word-break: break-all; }}
+                        .success-btn {{ background: #6366f1; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin: 10px; }}
+                        a {{ color: #60a5fa; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="error">
+                        <h1>✗ Connection Failed</h1>
+                        <p><strong>Error Code:</strong> {error_code}</p>
+                        <p><strong>Error:</strong> {error_message}</p>
+                    </div>
+                    <div class="info">
+                        <h3>Most Common Cause: Redirect URI Mismatch</h3>
+                        <p><strong>Expected Redirect URI:</strong></p>
+                        <div class="code">{redirect_uri}</div>
+                        <p><strong>Steps to fix:</strong></p>
+                        <ol>
+                            <li>Go to <a href="https://account.upstox.com/developer/apps" target="_blank">Upstox Developer Portal</a></li>
+                            <li>Find your app (API Key: {api_key[:8]}...)</li>
+                            <li>Click <strong>Edit/Settings</strong></li>
+                            <li>In <strong>Redirect URI(s)</strong> field, add EXACTLY:</li>
+                            <div class="code">{redirect_uri}</div>
+                            <li><strong>Save</strong> and wait 1-2 minutes</li>
+                            <li>Go back to dashboard and try connecting again</li>
+                        </ol>
+                        <p style="color: #fbbf24; margin-top: 20px;">
+                            ⚠️ <strong>Important:</strong> The URI must match EXACTLY - no trailing spaces, correct port, must end with /callback
+                        </p>
+                    </div>
+                    <button class="success-btn" onclick="window.close()">Close Window</button>
+                    <button class="success-btn" onclick="window.location.href='/'">Go to Dashboard</button>
+                </body>
+                </html>
+                '''
+                return error_html, 400
+        except Exception as auth_error:
+            import traceback
+            logger.error(f"[CALLBACK] ❌ Authentication exception: {auth_error}")
+            logger.error(f"[CALLBACK] Traceback: {traceback.format_exc()}")
+            # Show error page for exception too
+            error_html = f'''
+            <html>
+            <head>
+                <title>Upstox Connection Error</title>
+                <style>
+                    body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #0f172a; color: #f1f5f9; }}
+                    .error {{ background: #ef4444; padding: 20px; border-radius: 8px; margin: 20px auto; max-width: 600px; }}
+                    .code {{ background: #000; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; word-break: break-all; }}
+                    .success-btn {{ background: #6366f1; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin: 10px; }}
+                </style>
+            </head>
+            <body>
+                <div class="error">
+                    <h1>✗ Connection Error</h1>
+                    <p><strong>Error:</strong> {str(auth_error)}</p>
+                    <p>Please check server logs for details.</p>
+                </div>
+                <div class="code">Expected Redirect URI: {redirect_uri}</div>
+                <button class="success-btn" onclick="window.close()">Close Window</button>
+                <button class="success-btn" onclick="window.location.href='/'">Go to Dashboard</button>
+            </body>
+            </html>
+            '''
+            return error_html, 500
         
         if auth_success:
             connection_manager.save_connection(api_key, api_secret, redirect_uri, upstox_api.access_token, refresh_token)
@@ -1973,6 +2193,84 @@ def test_upstox_connection():
     except Exception as e:
         logger.error(f"[Phase 1.2] Connection test error: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/upstox/verify-redirect-uri', methods=['POST'])
+def verify_redirect_uri():
+    """Verify redirect URI format and provide detailed instructions"""
+    try:
+        data = request.get_json() or {}
+        redirect_uri = (data.get('redirect_uri') or '').strip()
+        api_key = (data.get('api_key') or '').strip()
+        
+        if not redirect_uri:
+            redirect_uri = 'http://localhost:5000/callback'
+        
+        # Validate format
+        is_valid, error_msg = connection_manager.validate_redirect_uri(redirect_uri)
+        
+        if not is_valid:
+            return jsonify({
+                'status': 'error',
+                'message': f'Invalid redirect URI format: {error_msg}',
+                'redirect_uri': redirect_uri,
+                'suggested': 'http://localhost:5000/callback'
+            }), 400
+        
+        # Provide detailed instructions
+        instructions = {
+            'step1': 'https://account.upstox.com/developer/apps',
+            'step2': f'Find your app (API Key: {api_key[:8] + "..." if api_key else "your API key"})',
+            'step3': 'Click Edit/Settings on your app',
+            'step4': 'In "Redirect URI(s)" field, add EXACTLY:',
+            'redirect_uri': redirect_uri,
+            'step5': 'Save the changes',
+            'step6': 'Come back and click Connect again',
+            'important_notes': [
+                'URI must match EXACTLY (including http:// and /callback)',
+                'No trailing spaces or extra characters',
+                'Case-sensitive',
+                'Must end with /callback'
+            ]
+        }
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Redirect URI format is valid',
+            'redirect_uri': redirect_uri,
+            'instructions': instructions
+        })
+    except Exception as e:
+        logger.error(f"Error verifying redirect URI: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+@app.route('/api/upstox/debug-info', methods=['GET'])
+def get_debug_info():
+    """Get debug information about current connection state"""
+    try:
+        info = {
+            'session_has_api_key': bool(session.get('upstox_api_key')),
+            'session_has_api_secret': bool(session.get('upstox_api_secret')),
+            'session_redirect_uri': session.get('upstox_redirect_uri'),
+            'is_connected': connection_manager.is_connected(),
+            'suggested_redirect_uri': 'http://localhost:5000/callback'
+        }
+        
+        # Try to get current port
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            info['detected_local_ip'] = local_ip
+            info['alternative_redirect_uri'] = f'http://{local_ip}:5000/callback'
+        except:
+            pass
+        
+        return jsonify(info)
+    except Exception as e:
+        logger.error(f"Error getting debug info: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/upstox/orders', methods=['GET'])
 def get_orders():
@@ -2253,6 +2551,28 @@ def place_order():
         return jsonify({'status': 'error', 'error': error_msg, 'hint': hint}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'error': f'Order placement failed: {str(e)}'}), 500
+
+@app.route('/api/stocks/universe', methods=['GET'])
+def get_stocks_universe():
+    """Get paginated NSE/BSE stock list. Query: exchange (NSE|BSE), limit, offset, search."""
+    exchange = request.args.get('exchange') or None
+    try:
+        limit = min(int(request.args.get('limit', 500)), 2000)
+    except (TypeError, ValueError):
+        limit = 500
+    try:
+        offset = max(0, int(request.args.get('offset', 0)))
+    except (TypeError, ValueError):
+        offset = 0
+    search = request.args.get('search', '').strip() or None
+    try:
+        su = get_stock_universe()
+        result = su.get_stocks_page(exchange=exchange, limit=limit, offset=offset, search=search)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Stocks universe API failed")
+        return jsonify({"stocks": [], "total": 0, "error": str(e)}), 500
+
 
 @app.route('/api/top_stocks')
 def get_top_stocks():
@@ -2638,7 +2958,7 @@ def get_trading_mode():
     """Phase 2.5: Get current trading mode"""
     try:
         mode_manager = get_trading_mode_manager()
-        mode_info = mode_manager.get_mode_info()
+        mode_info = mode_manager.get_status()
         return jsonify(mode_info)
     except Exception as e:
         logger.error(f"Error getting trading mode: {e}", exc_info=True)
@@ -3406,6 +3726,493 @@ def get_all_stocks_signals():
         logger.error(f"Error getting all stocks signals: {e}", exc_info=True)
         import traceback
         logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# Auto Trading API Endpoints
+# ============================================================================
+
+@app.route('/auto-trading-test')
+def auto_trading_test():
+    """Simple test to verify this app is running (returns 200 OK)"""
+    return "OK - Auto Trading app is running. Use /auto-trading for the dashboard."
+
+@app.route('/auto-trading')
+@app.route('/auto_trading')  # alternate URL in case of typo
+def auto_trading_dashboard():
+    """Auto trading dashboard page"""
+    return render_template('auto_trading.html')
+
+@app.route('/api/auto-trading/start', methods=['POST'])
+def start_auto_trading():
+    """Start auto trading and daily workflow (pre-market, scans, post-market)."""
+    try:
+        from src.web.auto_trader import AutoTrader
+        from src.web.upstox_connection import get_upstox_connection
+        from src.web.daily_workflow import get_daily_workflow_manager
+        
+        # Get Upstox client if available
+        upstox_conn = get_upstox_connection()
+        upstox_client = None
+        if upstox_conn and upstox_conn.is_connected():
+            upstox_client = upstox_conn.get_client()
+        
+        # Get or create auto trader
+        if not hasattr(app, '_auto_trader') or app._auto_trader is None:
+            app._auto_trader = AutoTrader(
+                upstox_client=upstox_client,
+                confidence_threshold=0.7,
+                max_positions=10
+            )
+        else:
+            # Update Upstox client if it changed
+            if upstox_client:
+                app._auto_trader.upstox_client = upstox_client
+                if app._auto_trader.trade_executor:
+                    app._auto_trader.trade_executor.upstox_client = upstox_client
+        # Wire Upstox to intraday data manager for real 5m/15m/1h data during market hours
+        if upstox_client:
+            from src.web.intraday_data_manager import get_intraday_data_manager
+            get_intraday_data_manager().set_upstox_client(upstox_client)
+        
+        if not app._auto_trader.start():
+            return jsonify({
+                'success': False,
+                'message': 'Failed to start auto trading'
+            }), 400
+        
+        # Wire to daily workflow so scans run on schedule (pre-market, market-hours, post-market)
+        workflow = get_daily_workflow_manager(app._auto_trader)
+        workflow.auto_trader = app._auto_trader
+        if workflow.start_daily_workflow():
+            return jsonify({
+                'success': True,
+                'message': 'Auto trading and daily workflow started (scans will run on schedule)'
+            })
+        # If scheduler already running or start failed, we still have auto_trader running
+        return jsonify({
+            'success': True,
+            'message': 'Auto trading started successfully'
+        })
+    
+    except Exception as e:
+        logger.error(f"Error starting auto trading: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auto-trading/stop', methods=['POST'])
+def stop_auto_trading():
+    """Stop daily workflow (scheduler) and auto trading."""
+    try:
+        from src.web.daily_workflow import get_daily_workflow_manager
+        
+        # Stop daily workflow first (stops scheduler and auto_trader)
+        workflow = get_daily_workflow_manager()
+        if workflow.is_running:
+            if workflow.stop_daily_workflow():
+                return jsonify({
+                    'success': True,
+                    'message': 'Auto trading and daily workflow stopped successfully'
+                })
+        # If workflow was not running, stop auto_trader directly
+        if hasattr(app, '_auto_trader') and app._auto_trader and app._auto_trader.is_running:
+            if app._auto_trader.stop():
+                return jsonify({
+                    'success': True,
+                    'message': 'Auto trading stopped successfully'
+                })
+            return jsonify({
+                'success': False,
+                'message': 'Failed to stop auto trading'
+            }), 400
+        return jsonify({
+            'success': True,
+            'message': 'Auto trading stopped (was not running)'
+        })
+    
+    except Exception as e:
+        logger.error(f"Error stopping auto trading: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auto-trading/pause', methods=['POST'])
+def pause_auto_trading():
+    """Pause auto trading (circuit breaker)"""
+    try:
+        if hasattr(app, '_auto_trader') and app._auto_trader:
+            # Trigger circuit breaker
+            app._auto_trader.circuit_breaker_triggered = True
+            app._auto_trader.circuit_breaker_time = datetime.now()
+            return jsonify({
+                'success': True,
+                'message': 'Auto trading paused (circuit breaker activated)'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Auto trader not initialized'
+            }), 400
+    
+    except Exception as e:
+        logger.error(f"Error pausing auto trading: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auto-trading/status')
+def get_auto_trading_status():
+    """Get auto trading status"""
+    try:
+        if hasattr(app, '_auto_trader') and app._auto_trader:
+            status = app._auto_trader.get_status()
+            
+            # Add market status
+            from src.web.market_hours import get_market_hours_manager
+            market_hours = get_market_hours_manager()
+            status['market_status'] = market_hours.get_market_status()
+            
+            # Add Upstox connection status
+            from src.web.upstox_connection import get_upstox_connection
+            upstox_conn = get_upstox_connection()
+            status['upstox_connected'] = upstox_conn.is_connected() if upstox_conn else False
+            
+            # Add trading mode
+            from src.web.trading_mode import get_trading_mode_manager
+            trading_mode = get_trading_mode_manager()
+            status['trading_mode'] = trading_mode.get_mode().value if trading_mode else 'paper'
+            
+            # Add open positions count
+            positions = app._auto_trader._get_current_positions()
+            status['open_positions'] = len(positions)
+            
+            # Add accuracy summary for active signal source (last 30 days)
+            try:
+                from src.web.ai_models.performance_tracker import get_performance_tracker
+                tracker = get_performance_tracker()
+                src = status.get('signal_source', 'elite')
+                active = status.get('active_quant_strategy', '')
+                model_id = 'quant_ensemble' if src == 'quant_ensemble' else ('quant_' + active if src == 'quant' else 'elite_multi_tf')
+                metrics = tracker.calculate_metrics(model_id, days=30)
+                if 'error' not in metrics:
+                    status['accuracy_30d'] = round(metrics.get('accuracy', 0) * 100, 1)
+                    status['win_rate_30d'] = round(metrics.get('win_rate', 0) * 100, 1)
+                    status['evaluated_predictions_30d'] = metrics.get('evaluated_predictions', 0)
+                else:
+                    status['accuracy_30d'] = None
+                    status['win_rate_30d'] = None
+            except Exception:
+                status['accuracy_30d'] = None
+                status['win_rate_30d'] = None
+            
+            return jsonify(status)
+        else:
+            from src.web.risk_config import get_risk_config
+            from src.web.strategies.strategy_manager import get_strategy_manager
+            rc = get_risk_config()
+            sm = get_strategy_manager()
+            return jsonify({
+                'is_running': False,
+                'message': 'Auto trader not initialized',
+                'market_status': {'status': 'UNKNOWN'},
+                'upstox_connected': False,
+                'trading_mode': 'paper',
+                'open_positions': 0,
+                'confidence_threshold': rc.get('confidence_threshold'),
+                'max_positions': rc.get('max_open_positions'),
+                'signal_source': rc.get('signal_source', 'elite'),
+                'quant_ensemble_method': rc.get('quant_ensemble_method', 'weighted_average'),
+                'active_quant_strategy': sm.active_strategy,
+                'available_quant_strategies': sm.get_available_strategies(),
+                'accuracy_30d': None,
+                'win_rate_30d': None,
+                'circuit_breaker': {
+                    'daily_loss_limit_pct': rc.get('daily_loss_limit_pct'),
+                    'daily_loss_limit_amount': rc.get('daily_loss_limit_amount'),
+                    'max_consecutive_losses': rc.get('max_consecutive_losses'),
+                    'cooldown_minutes': rc.get('cooldown_minutes'),
+                }
+            })
+    
+    except Exception as e:
+        logger.error(f"Error getting auto trading status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/auto-trading/settings', methods=['POST'])
+def set_auto_trading_settings():
+    """Set signal source (elite | quant | quant_ensemble) and/or active quant strategy."""
+    try:
+        data = request.get_json() or {}
+        updates = {}
+        if 'signal_source' in data:
+            v = (data['signal_source'] or '').lower()
+            if v in ('elite', 'quant', 'quant_ensemble'):
+                updates['signal_source'] = v
+        if 'quant_ensemble_method' in data:
+            v = (data['quant_ensemble_method'] or '').lower()
+            if v in ('weighted_average', 'voting', 'best_performer'):
+                updates['quant_ensemble_method'] = v
+        if updates:
+            from src.web.risk_config import update_risk_config
+            update_risk_config(updates)
+            if hasattr(app, '_auto_trader') and app._auto_trader:
+                for k, v in updates.items():
+                    setattr(app._auto_trader, k, v)
+        active_name = None
+        if 'active_quant_strategy' in data:
+            from src.web.strategies.strategy_manager import get_strategy_manager
+            sm = get_strategy_manager()
+            name = data['active_quant_strategy']
+            if sm.set_active_strategy(name):
+                active_name = name
+        if not updates and active_name is None:
+            return jsonify({'success': False, 'error': 'No valid settings to update'}), 400
+        return jsonify({
+            'success': True,
+            'message': 'Settings updated',
+            'signal_source': updates.get('signal_source') or (getattr(app._auto_trader, 'signal_source', None) if hasattr(app, '_auto_trader') and app._auto_trader else None),
+            'quant_ensemble_method': updates.get('quant_ensemble_method'),
+            'active_quant_strategy': active_name
+        })
+    except Exception as e:
+        logger.exception("Error updating auto trading settings")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/auto-trading/scan', methods=['POST'])
+def run_auto_trading_scan():
+    """Run one scan-and-execute cycle now (manual trigger)."""
+    try:
+        if not hasattr(app, '_auto_trader') or app._auto_trader is None:
+            return jsonify({
+                'success': False,
+                'error': 'Auto trader not initialized. Start auto trading first.'
+            }), 400
+        from src.web.market_hours import get_market_hours_manager
+        market_hours = get_market_hours_manager()
+        is_intraday = market_hours.is_market_open()
+        result = app._auto_trader.scan_and_execute(
+            timeframes=['5m', '15m', '1h', '1d'],
+            is_intraday=is_intraday
+        )
+        if result.get('error'):
+            return jsonify({
+                'success': False,
+                'error': result['error'],
+                'result': result
+            }), 400
+        return jsonify({
+            'success': True,
+            'result': result,
+            'timestamp': result.get('timestamp')
+        })
+    except Exception as e:
+        logger.exception("Run scan failed")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/auto-trading/backtest-run', methods=['POST'])
+def run_backtest_tuning():
+    """Run threshold sweep and strategy ranking; return results (does not apply)."""
+    try:
+        from datetime import date, timedelta
+        from src.web.backtest_tuning import run_threshold_sweep, run_strategy_ranking
+        data = request.get_json() or {}
+        ticker = data.get('ticker') or None
+        if not ticker:
+            from src.web.data.all_stocks_list import get_all_stocks
+            stocks = get_all_stocks()
+            ticker = (stocks[0] if stocks else 'RELIANCE.NS')
+        end_date = data.get('end_date') or date.today().strftime('%Y-%m-%d')
+        start_date = data.get('start_date') or (date.today() - timedelta(days=365)).strftime('%Y-%m-%d')
+        sweep = run_threshold_sweep(ticker, start_date, end_date)
+        ranking = run_strategy_ranking(ticker, start_date, end_date)
+        return jsonify({
+            'success': 'error' not in sweep and 'error' not in ranking,
+            'ticker': ticker,
+            'start_date': start_date,
+            'end_date': end_date,
+            'sweep': sweep,
+            'ranking': ranking,
+        })
+    except Exception as e:
+        logger.exception("Backtest tuning run failed")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/auto-trading/backtest-apply', methods=['POST'])
+def apply_backtest_tuning():
+    """Apply backtest results: set confidence_threshold (capped) and/or active strategy."""
+    try:
+        from src.web.backtest_tuning import apply_backtest_results, BEST_THRESHOLD_CAP
+        data = request.get_json() or {}
+        apply_threshold = data.get('apply_threshold', False)
+        apply_strategy = data.get('apply_strategy', False)
+        best_threshold = data.get('best_threshold')
+        best_strategy = data.get('best_strategy')
+        try:
+            th_val = float(best_threshold) if best_threshold is not None else None
+        except (TypeError, ValueError):
+            th_val = None
+        sweep_result = {'best_threshold': min(th_val, BEST_THRESHOLD_CAP)} if (apply_threshold and th_val is not None) else None
+        ranking_result = {'best_strategy': best_strategy} if (apply_strategy and best_strategy) else None
+        out = apply_backtest_results(
+            sweep_result=sweep_result,
+            ranking_result=ranking_result,
+            apply_threshold=bool(sweep_result),
+            apply_strategy=bool(ranking_result),
+        )
+        return jsonify({'success': True, **out})
+    except Exception as e:
+        logger.exception("Backtest apply failed")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/auto-trading/retrain-elite', methods=['POST'])
+def retrain_elite_baseline():
+    """Run periodic retrain of ELITE baseline model. Uses time-based split and saves to data/models/."""
+    try:
+        from scripts.retrain_elite_baseline import run_retrain
+        data = request.get_json() or {}
+        ticker = data.get('ticker', 'RELIANCE.NS')
+        days = int(data.get('days_back', 504))
+        ok = run_retrain(ticker=ticker, days_back=days)
+        return jsonify({'success': ok, 'message': 'Model retrained and saved' if ok else 'Retrain failed'})
+    except ImportError:
+        try:
+            from src.research.data import download_yahoo_ohlcv
+            from src.research.features import make_features, add_label_forward_return_up, clean_ml_frame
+            from src.research.ml import train_baseline_classifier, save_model
+            from datetime import datetime, timedelta
+            data = request.get_json() or {}
+            ticker = data.get('ticker', 'RELIANCE.NS')
+            days = int(data.get('days_back', 504))
+            end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            ohlcv = download_yahoo_ohlcv(ticker=ticker, start=start_date, end=end_date, interval='1d')
+            if not ohlcv or len(ohlcv.df) < 300:
+                return jsonify({'success': False, 'message': 'Insufficient data'}), 400
+            df = make_features(ohlcv.df)
+            df = add_label_forward_return_up(df, days=1, threshold=0.0)
+            feature_cols = [c for c in ['ret_1', 'ret_5', 'vol_10', 'sma_10', 'sma_50', 'ema_20', 'rsi_14', 'macd', 'macd_signal', 'macd_hist', 'vol_chg_1', 'vol_sma_20'] if c in df.columns]
+            if len(feature_cols) < 5:
+                return jsonify({'success': False, 'message': 'Not enough features'}), 400
+            ml_df = clean_ml_frame(df, feature_cols=feature_cols, label_col='label_up')
+            if len(ml_df) < 252:
+                return jsonify({'success': False, 'message': 'Insufficient rows'}), 400
+            train_result, _ = train_baseline_classifier(df=ml_df, feature_cols=feature_cols, label_col='label_up', test_size=0.2, random_state=42)
+            Path('data/models').mkdir(parents=True, exist_ok=True)
+            save_model(train_result.model, 'data/models/elite_baseline.joblib')
+            with open('data/models/elite_baseline_features.json', 'w') as f:
+                json.dump(feature_cols, f, indent=2)
+            return jsonify({'success': True, 'message': 'Model retrained and saved'})
+        except Exception as e:
+            logger.exception("ELITE retrain failed")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception as e:
+        logger.exception("ELITE retrain failed")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/auto-trading/history')
+def get_auto_trading_history():
+    """Get auto trading execution history"""
+    try:
+        if hasattr(app, '_auto_trader') and app._auto_trader and app._auto_trader.trade_executor:
+            history = app._auto_trader.trade_executor.get_execution_history(limit=100)
+            
+            # Format history for display
+            formatted_history = []
+            for exec_record in history:
+                signal = exec_record.get('signal', {})
+                formatted_history.append({
+                    'timestamp': exec_record.get('timestamp', ''),
+                    'ticker': signal.get('ticker', '') or exec_record.get('ticker', ''),
+                    'signal': signal.get('consensus_signal', '') or signal.get('signal', ''),
+                    'probability': signal.get('probability', 0),
+                    'success': exec_record.get('success', False),
+                    'transaction_type': exec_record.get('transaction_type', ''),
+                    'quantity': exec_record.get('quantity', 0),
+                    'price': exec_record.get('price', signal.get('current_price', 0))
+                })
+            
+            return jsonify(formatted_history)
+        else:
+            return jsonify([])
+    
+    except Exception as e:
+        logger.error(f"Error getting auto trading history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auto-trading/reset-circuit-breaker', methods=['POST'])
+def reset_circuit_breaker():
+    """Reset circuit breaker"""
+    try:
+        if hasattr(app, '_auto_trader') and app._auto_trader:
+            app._auto_trader.reset_circuit_breaker()
+            return jsonify({
+                'success': True,
+                'message': 'Circuit breaker reset successfully'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Auto trader not initialized'
+            }), 400
+    
+    except Exception as e:
+        logger.error(f"Error resetting circuit breaker: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/trading-signals', methods=['POST'])
+def get_trading_signals():
+    """Get trading signals for given stocks"""
+    try:
+        data = request.get_json()
+        stocks = data.get('stocks', [])
+        intraday = data.get('intraday', False)
+        min_confidence = float(data.get('min_confidence', 0.55))
+        
+        if not stocks:
+            return jsonify({'status': 'error', 'message': 'No stocks provided'}), 400
+        
+        # Import trading signals functions
+        # project_root is already added to sys.path at the top of the file
+        from trading_signals_nse_only import scan_stocks
+        
+        # Get signals
+        signals = scan_stocks(stocks, min_confidence=min_confidence, intraday=intraday)
+        
+        return jsonify({
+            'status': 'success',
+            'signals': signals,
+            'count': len(signals)
+        })
+    
+    except Exception as e:
+        logger.error(f"Error getting trading signals: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trading/positions')
+def get_auto_trading_positions():
+    """Get current open positions from auto trading"""
+    try:
+        if hasattr(app, '_auto_trader') and app._auto_trader:
+            positions = app._auto_trader._get_current_positions()
+            
+            # Format positions for display
+            formatted_positions = []
+            for pos in positions:
+                formatted_positions.append({
+                    'ticker': pos.get('ticker') or pos.get('symbol', ''),
+                    'quantity': pos.get('quantity', 0),
+                    'entry_price': pos.get('entry_price', pos.get('average_price', 0)),
+                    'current_price': pos.get('current_price', pos.get('ltp', 0)),
+                    'pnl': pos.get('pnl', 0),
+                    'product': pos.get('product', 'I')
+                })
+            
+            return jsonify(formatted_positions)
+        else:
+            return jsonify([])
+    
+    except Exception as e:
+        logger.error(f"Error getting auto trading positions: {e}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

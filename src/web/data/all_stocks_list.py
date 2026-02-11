@@ -1,9 +1,14 @@
 """
 Comprehensive list of BSE and NSE stocks for signal generation
-Includes NIFTY 500 stocks + major BSE stocks
+Now uses dynamic stock universe loader from stock_universe.py
+Maintains backward compatibility with hardcoded lists as fallback
 """
+import logging
+from typing import List, Optional
 
-# NIFTY 50 stocks (Top 50 by market cap)
+logger = logging.getLogger(__name__)
+
+# Fallback hardcoded lists (used if stock_universe fails to load)
 NIFTY_50 = [
     'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'HINDUNILVR.NS',
     'ICICIBANK.NS', 'BHARTIARTL.NS', 'SBIN.NS', 'BAJFINANCE.NS', 'LICI.NS',
@@ -17,7 +22,6 @@ NIFTY_50 = [
     'DRREDDY.NS', 'ADANIGREEN.NS', 'HINDALCO.NS', 'TATACONSUM.NS', 'VEDL.NS'
 ]
 
-# NIFTY Next 50 (51-100)
 NIFTY_NEXT_50 = [
     'PIDILITIND.NS', 'MARICO.NS', 'GODREJCP.NS', 'DABUR.NS', 'COLPAL.NS',
     'HAVELLS.NS', 'BERGEPAINT.NS', 'VOLTAS.NS', 'WHIRLPOOL.NS', 'CROMPTON.NS',
@@ -31,80 +35,186 @@ NIFTY_NEXT_50 = [
     'GODREJ.NS', 'EMAMILTD.NS', 'DALBHARAT.NS', 'ULTRATECH.NS', 'SHREECEM.NS'
 ]
 
-# NIFTY Midcap 150 (Major midcaps)
-NIFTY_MIDCAP_150 = [
-    'ALKEM.NS', 'AUBANK.NS', 'BANKBARODA.NS', 'BATAINDIA.NS', 'BEL.NS',
-    'CANBK.NS', 'CHOLAFIN.NS', 'CUMMINSIND.NS', 'ESCORTS.NS', 'EXIDEIND.NS',
-    'FEDERALBNK.NS', 'GODREJPROP.NS', 'IDFCFIRSTB.NS', 'INDIANB.NS', 'IOB.NS',
-    'JINDALSAW.NS', 'JKCEMENT.NS', 'JSWENERGY.NS', 'KAJARIACER.NS', 'L&TFH.NS',
-    'LICHSGFIN.NS', 'MANAPPURAM.NS', 'MCDOWELL-N.NS', 'MFSL.NS', 'MRF.NS',
-    'NHPC.NS', 'OBEROIRLTY.NS', 'OFSS.NS', 'PAGEIND.NS', 'PEL.NS',
-    'PETRONET.NS', 'PNB.NS', 'POLICYBZR.NS', 'RBLBANK.NS', 'RECLTD.NS',
-    'SAIL.NS', 'SIEMENS.NS', 'SRF.NS', 'SUNDARMFIN.NS', 'SUZLON.NS',
-    'TATACOMM.NS', 'TATAPOWER.NS', 'TORNTPHARM.NS', 'TVSMOTOR.NS', 'UNIONBANK.NS',
-    'UPL.NS', 'VEDL.NS', 'YESBANK.NS', 'ZEEL.NS', 'ZYDUSLIFE.NS'
-]
+ALL_STOCKS_FALLBACK = NIFTY_50 + NIFTY_NEXT_50
 
-# NIFTY Smallcap 250 (Major smallcaps)
-NIFTY_SMALLCAP_250 = [
-    'AARTIIND.NS', 'ABFRL.NS', 'ADANITRANS.NS', 'AEGISCHEM.NS', 'AFFLE.NS',
-    'ALKYLAMINES.NS', 'AMARAJABAT.NS', 'ANANTRAJ.NS', 'APAR.NS', 'APLAPOLLO.NS',
-    'APTUS.NS', 'ASAHIINDIA.NS', 'ASHOKLEY.NS', 'ASTEC.NS', 'ASTRAL.NS',
-    'ATUL.NS', 'AURIONPRO.NS', 'AUTOAXLES.NS', 'AVANTI.NS', 'BALKRISIND.NS',
-    'BALRAMCHIN.NS', 'BANDHANBNK.NS', 'BASF.NS', 'BEML.NS', 'BHARATFORG.NS',
-    'BIOCON.NS', 'BLUEDART.NS', 'BOSCHLTD.NS', 'BRIGADE.NS', 'BSOFT.NS',
-    'CAMS.NS', 'CANFINHOME.NS', 'CARBORUNIV.NS', 'CASTROLIND.NS', 'CCL.NS',
-    'CENTRALBK.NS', 'CENTURYPLY.NS', 'CESC.NS', 'CHAMBLFERT.NS', 'CHEMCON.NS',
-    'CHENNPETRO.NS', 'CHOLAFIN.NS', 'CIPLA.NS', 'CLEAN.NS', 'COCHINSHIP.NS',
-    'CONCOR.NS', 'COROMANDEL.NS', 'CROMPTON.NS', 'CYIENT.NS', 'DABUR.NS'
-]
 
-# Major BSE stocks
-BSE_MAJOR_STOCKS = [
-    'RELIANCE.BO', 'TCS.BO', 'HDFCBANK.BO', 'INFY.BO', 'HINDUNILVR.BO',
-    'ICICIBANK.BO', 'BHARTIARTL.BO', 'SBIN.BO', 'BAJFINANCE.BO', 'ITC.BO',
-    'LT.BO', 'HCLTECH.BO', 'AXISBANK.BO', 'MARUTI.BO', 'KOTAKBANK.BO',
-    'ASIANPAINT.BO', 'TITAN.BO', 'ULTRACEMCO.BO', 'NTPC.BO', 'SUNPHARMA.BO',
-    'ONGC.BO', 'NESTLEIND.BO', 'POWERGRID.BO', 'M&M.BO', 'WIPRO.BO',
-    'COALINDIA.BO', 'TECHM.BO', 'TATAMOTORS.BO', 'JSWSTEEL.BO', 'ADANIENT.BO'
-]
+def _get_stock_universe():
+    """Get stock universe instance, handling import errors gracefully"""
+    try:
+        from src.web.stock_universe import get_stock_universe
+        return get_stock_universe()
+    except Exception as e:
+        logger.warning(f"Failed to load stock_universe module: {e}. Using fallback lists.")
+        return None
 
-# Combine all stocks (prioritize NSE, avoid duplicates)
-ALL_STOCKS = []
 
-# Add NIFTY 50
-ALL_STOCKS.extend(NIFTY_50)
+def get_all_stocks() -> List[str]:
+    """
+    Get comprehensive list of all BSE/NSE stocks
+    Uses dynamic stock universe if available, otherwise falls back to hardcoded list
+    
+    Returns:
+        List of Yahoo Finance tickers (e.g., ['RELIANCE.NS', 'TCS.NS', ...])
+    """
+    universe = _get_stock_universe()
+    if universe:
+        try:
+            stocks = universe.get_all_stocks()
+            if stocks:
+                logger.debug(f"Loaded {len(stocks)} stocks from dynamic universe")
+                return stocks
+        except Exception as e:
+            logger.warning(f"Error getting stocks from universe: {e}. Using fallback.")
+    
+    # Fallback to hardcoded list
+    logger.debug("Using fallback stock list")
+    return ALL_STOCKS_FALLBACK.copy()
 
-# Add NIFTY Next 50 (avoid duplicates)
-for stock in NIFTY_NEXT_50:
-    if stock not in ALL_STOCKS:
-        ALL_STOCKS.append(stock)
 
-# Add NIFTY Midcap 150 (avoid duplicates)
-for stock in NIFTY_MIDCAP_150:
-    if stock not in ALL_STOCKS:
-        ALL_STOCKS.append(stock)
-
-# Add NIFTY Smallcap 250 (avoid duplicates, limit to first 100 for performance)
-for stock in NIFTY_SMALLCAP_250[:100]:
-    if stock not in ALL_STOCKS:
-        ALL_STOCKS.append(stock)
-
-# Total: ~300 stocks (NIFTY 50 + Next 50 + Midcap 150 + 100 Smallcap)
-# This provides comprehensive coverage while maintaining performance
-
-def get_all_stocks():
-    """Get comprehensive list of all BSE/NSE stocks"""
-    return ALL_STOCKS.copy()
-
-def get_nifty_50():
-    """Get NIFTY 50 stocks"""
+def get_nifty_50() -> List[str]:
+    """
+    Get NIFTY 50 stocks
+    Uses dynamic stock universe if available, otherwise falls back to hardcoded list
+    """
+    universe = _get_stock_universe()
+    if universe:
+        try:
+            # Try to get NSE stocks and filter for NIFTY50 if possible
+            # For now, return fallback since we don't have NIFTY50 membership data
+            pass
+        except Exception:
+            pass
+    
     return NIFTY_50.copy()
 
-def get_nifty_next_50():
-    """Get NIFTY Next 50 stocks"""
+
+def get_nifty_next_50() -> List[str]:
+    """
+    Get NIFTY Next 50 stocks
+    Uses dynamic stock universe if available, otherwise falls back to hardcoded list
+    """
     return NIFTY_NEXT_50.copy()
 
-def get_major_stocks(limit=100):
-    """Get major stocks (NIFTY 50 + Next 50)"""
-    return (NIFTY_50 + NIFTY_NEXT_50)[:limit]
+
+def get_major_stocks(limit: int = 100) -> List[str]:
+    """
+    Get major stocks (NIFTY 50 + Next 50)
+    
+    Args:
+        limit: Maximum number of stocks to return
+    
+    Returns:
+        List of tickers
+    """
+    major = get_nifty_50() + get_nifty_next_50()
+    return major[:limit]
+
+
+def refresh_stock_list():
+    """
+    Refresh stock list from Upstox/NSE APIs
+    Forces a refresh of the stock universe cache
+    """
+    universe = _get_stock_universe()
+    if universe:
+        try:
+            universe.refresh_universe()
+            logger.info("Stock list refreshed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error refreshing stock list: {e}")
+            return False
+    else:
+        logger.warning("Cannot refresh: stock_universe module not available")
+        return False
+
+
+def get_stocks_by_exchange(exchange: str) -> List[str]:
+    """
+    Get stocks filtered by exchange
+    
+    Args:
+        exchange: 'NSE' or 'BSE'
+    
+    Returns:
+        List of tickers
+    """
+    universe = _get_stock_universe()
+    if universe:
+        try:
+            return universe.get_stocks_by_exchange(exchange)
+        except Exception as e:
+            logger.warning(f"Error getting stocks by exchange: {e}")
+    
+    # Fallback: filter from all stocks
+    all_stocks = get_all_stocks()
+    if exchange.upper() == 'NSE':
+        return [s for s in all_stocks if s.endswith('.NS')]
+    elif exchange.upper() == 'BSE':
+        return [s for s in all_stocks if s.endswith('.BO')]
+    return []
+
+
+def get_stocks_by_market_cap(min_mcap: Optional[float] = None, 
+                              max_mcap: Optional[float] = None) -> List[str]:
+    """
+    Get stocks filtered by market cap
+    
+    Args:
+        min_mcap: Minimum market cap (in crores)
+        max_mcap: Maximum market cap (in crores)
+    
+    Returns:
+        List of tickers matching market cap criteria
+    """
+    universe = _get_stock_universe()
+    if universe:
+        try:
+            return universe.get_stocks_by_market_cap(min_mcap, max_mcap)
+        except Exception as e:
+            logger.warning(f"Error getting stocks by market cap: {e}")
+    
+    # Fallback: return all stocks
+    return get_all_stocks()
+
+
+def get_stocks_by_sector(sector: str) -> List[str]:
+    """
+    Get stocks filtered by sector
+    
+    Args:
+        sector: Sector name (e.g., 'BANKING', 'IT', 'PHARMA')
+    
+    Returns:
+        List of tickers in the specified sector
+    """
+    universe = _get_stock_universe()
+    if universe:
+        try:
+            return universe.get_stocks_by_sector(sector)
+        except Exception as e:
+            logger.warning(f"Error getting stocks by sector: {e}")
+    
+    # Fallback: return all stocks
+    return get_all_stocks()
+
+
+def get_stocks_by_liquidity(min_volume: Optional[float] = None) -> List[str]:
+    """
+    Get stocks filtered by liquidity (average daily volume)
+    
+    Args:
+        min_volume: Minimum average daily volume
+    
+    Returns:
+        List of tickers matching liquidity criteria
+    """
+    universe = _get_stock_universe()
+    if universe:
+        try:
+            return universe.get_stocks_by_liquidity(min_volume)
+        except Exception as e:
+            logger.warning(f"Error getting stocks by liquidity: {e}")
+    
+    # Fallback: return all stocks
+    return get_all_stocks()

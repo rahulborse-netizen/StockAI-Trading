@@ -38,6 +38,10 @@
                 <button class="btn-modern btn-icon mobile-menu-btn" onclick="toggleMobileSidebar()" title="Menu" id="mobile-menu-btn" style="display: none;">
                     <i class="fas fa-bars"></i>
                 </button>
+                <a href="/trading-signals" class="btn-modern btn-icon" title="Trading Signals">
+                    <i class="fas fa-signal"></i>
+                    <span class="mobile-hide">Signals</span>
+                </a>
                 <button class="btn-modern btn-icon" onclick="showUpstoxModal()" title="Connect Upstox">
                     <i class="fas fa-plug"></i>
                     <span class="mobile-hide">Connect</span>
@@ -50,6 +54,11 @@
                 <div class="connection-status" id="ws-connection-status" style="font-size: 0.75rem; margin-left: 0.5rem;">
                     <span>○ Disconnected</span>
                 </div>
+                <!-- Auto Trading Toggle -->
+                <button class="btn-modern btn-icon" id="auto-trading-toggle-btn" onclick="toggleAutoTrading()" title="Auto Trading">
+                    <i class="fas fa-robot" id="auto-trading-icon"></i>
+                    <span class="mobile-hide" id="auto-trading-label">Auto: OFF</span>
+                </button>
                 <button class="btn-modern btn-icon" onclick="toggleTheme()" title="Toggle Theme">
                     <i class="fas fa-moon" id="theme-icon"></i>
                 </button>
@@ -135,6 +144,63 @@
             </button>
             <div id="sectoral-indices-container" style="display: none; margin-top: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
                 <!-- Sectoral indices will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto Trading Status Card -->
+    <div class="auto-trading-card" id="auto-trading-card" style="display: none; margin: 1rem auto; max-width: 1400px; padding: 0 1rem;">
+        <div class="card-modern" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <h3 style="margin: 0; font-size: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <i class="fas fa-robot"></i> Auto Trading
+                    </h3>
+                    <div class="connection-status" id="auto-trading-status-indicator" style="font-size: 0.9rem;">
+                        <i class="fas fa-circle" style="color: #dc3545;"></i>
+                        <span id="auto-trading-status-text">Stopped</span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button class="btn-modern btn-primary btn-sm" id="btn-auto-start" onclick="startAutoTrading()">
+                        <i class="fas fa-play"></i> Start
+                    </button>
+                    <button class="btn-modern btn-warning btn-sm" id="btn-auto-pause" onclick="pauseAutoTrading()" style="display: none;">
+                        <i class="fas fa-pause"></i> Pause
+                    </button>
+                    <button class="btn-modern btn-danger btn-sm" id="btn-auto-stop" onclick="stopAutoTrading()" style="display: none;">
+                        <i class="fas fa-stop"></i> Stop
+                    </button>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                <div style="text-align: center;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Signals Generated</div>
+                    <div style="font-size: 1.5rem; font-weight: 600;" id="auto-trading-signals">0</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Trades Executed</div>
+                    <div style="font-size: 1.5rem; font-weight: 600;" id="auto-trading-executed">0</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Accuracy (30d)</div>
+                    <div style="font-size: 1.5rem; font-weight: 600;" id="auto-trading-accuracy">—</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Win Rate (30d)</div>
+                    <div style="font-size: 1.5rem; font-weight: 600;" id="auto-trading-winrate">—</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Open Positions</div>
+                    <div style="font-size: 1.5rem; font-weight: 600;" id="auto-trading-positions">0</div>
+                </div>
+            </div>
+            <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color); font-size: 0.85rem; color: var(--text-secondary);">
+                <strong>Signal Source:</strong> <span id="auto-trading-signal-source">ELITE</span> | 
+                <strong>Confidence:</strong> <span id="auto-trading-confidence">0.70</span> | 
+                <a href="/auto-trading" style="color: var(--accent-blue); text-decoration: none; margin-left: 0.5rem;">
+                    <i class="fas fa-cog"></i> Advanced Settings
+                </a>
             </div>
         </div>
     </div>
@@ -364,6 +430,7 @@
                     <div class="signals-header">
                         <h3><i class="fas fa-crosshairs"></i> Trading Signals & Entry/Exit Levels</h3>
                         <div class="signals-actions">
+                            <span id="signals-last-updated" class="text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;">Last updated: —</span>
                             <button class="btn-modern btn-primary" onclick="loadAdaptiveEliteSignals()" style="margin-right: 0.5rem;">
                                 <i class="fas fa-brain"></i> Adaptive Elite Signals
                             </button>
@@ -376,6 +443,12 @@
                             <button class="btn-modern btn-primary" onclick="loadAllStocksSignals()">
                                 <i class="fas fa-database"></i> All Stocks Signals
                             </button>
+                            <button class="btn-modern btn-secondary" onclick="openStocksUniverseModal()" style="margin-right: 0.5rem;">
+                                <i class="fas fa-list"></i> All NSE/BSE Stocks
+                            </button>
+                            <a href="/auto-trading" class="btn-modern btn-secondary" style="margin-left: 0.5rem; text-decoration: none;" title="Open Auto Trading page for advanced settings">
+                                <i class="fas fa-cog"></i> Auto Trading Settings
+                            </a>
                         </div>
                     </div>
                     
@@ -519,7 +592,7 @@
                             <label class="form-label-modern">
                                 <i class="fas fa-key"></i> API Key
                             </label>
-                            <input type="text" class="input-modern" id="api-key" required>
+                            <input type="text" class="input-modern" id="api-key" required oninput="updateApiKeyPreview()">
                         </div>
                         <div class="form-group-modern">
                             <label class="form-label-modern">
@@ -537,21 +610,33 @@
                                 ⚠️ <strong>CRITICAL:</strong> Leave empty to auto-detect, but make sure the detected URI is added in 
                                 <a href="https://account.upstox.com/developer/apps" target="_blank" style="color: #6366f1;">Upstox Developer Portal</a>
                             </small>
+                            <div style="margin-top: 0.5rem;">
+                                <button type="button" class="btn-modern btn-secondary btn-sm" onclick="verifyRedirectURI()" style="margin-bottom: 0.5rem;">
+                                    <i class="fas fa-check-circle"></i> Verify Redirect URI Format
+                                </button>
+                            </div>
                             <div class="info-box" style="margin-top: 0.5rem; padding: 0.75rem; background: #fef3c7; border-left: 3px solid #f59e0b;">
-                                <strong style="color: #92400e;">💡 Tip:</strong> 
+                                <strong style="color: #92400e;">💡 Step-by-Step Guide:</strong> 
                                 <div style="color: #78350f; font-size: 0.875rem; margin-top: 0.5rem;">
-                                    <strong>Add this EXACT redirect URI in Upstox Portal:</strong>
-                                    <div style="background: #fff; padding: 0.5rem; margin: 0.5rem 0; border-radius: 4px; font-family: monospace; font-size: 0.9rem; color: #1f2937;">
-                                        http://localhost:5000/callback
-                                    </div>
-                                    <div style="margin-top: 0.5rem;">
-                                        <strong>Portal:</strong> 
-                                        <a href="https://account.upstox.com/developer/apps" target="_blank" style="color: #6366f1; text-decoration: underline;">
-                                            https://account.upstox.com/developer/apps
-                                        </a>
-                                    </div>
-                                    <div style="margin-top: 0.5rem; font-size: 0.8rem; color: #92400e;">
-                                        ⚠️ If you get "UDAPI100068" error, the redirect URI doesn't match exactly.
+                                    <ol style="margin-left: 1.5rem; line-height: 1.8;">
+                                        <li><strong>Copy this EXACT redirect URI:</strong>
+                                            <div style="background: #fff; padding: 0.5rem; margin: 0.5rem 0; border-radius: 4px; font-family: monospace; font-size: 0.9rem; color: #1f2937; cursor: pointer;" onclick="copyToClipboard('http://localhost:5000/callback', this)" title="Click to copy">
+                                                http://localhost:5000/callback
+                                            </div>
+                                        </li>
+                                        <li><strong>Go to Upstox Portal:</strong> 
+                                            <a href="https://account.upstox.com/developer/apps" target="_blank" style="color: #6366f1; text-decoration: underline;">
+                                                https://account.upstox.com/developer/apps
+                                            </a>
+                                        </li>
+                                        <li><strong>Find your app</strong> (API Key: <span id="api-key-preview">your key</span>)</li>
+                                        <li><strong>Click Edit/Settings</strong></li>
+                                        <li><strong>Paste the redirect URI</strong> in "Redirect URI(s)" field</li>
+                                        <li><strong>Save</strong> and come back here</li>
+                                        <li><strong>Click Connect</strong> button below</li>
+                                    </ol>
+                                    <div style="margin-top: 0.5rem; padding: 0.5rem; background: #fee2e2; border-radius: 4px; font-size: 0.8rem; color: #991b1b;">
+                                        ⚠️ <strong>Common mistakes:</strong> Trailing spaces, wrong port, missing /callback, using https instead of http
                                     </div>
                                 </div>
                             </div>
@@ -581,6 +666,9 @@
                                     <li>Verify that redirect URI is in Upstox Portal before authorizing</li>
                                     <li>Authorize the app in the popup window</li>
                                 </ol>
+                                <p style="margin: 0.75rem 0 0; padding-top: 0.5rem; border-top: 1px solid var(--border-color); font-size: 0.875rem;">
+                                    <strong>Algo trading:</strong> After connecting, open <a href="/auto-trading" target="_blank">Auto Trading</a> to let the algorithm place and manage trades with no human interference (using your Upstox account).
+                                </p>
                             </div>
                         </div>
 
@@ -881,6 +969,55 @@
                     <button type="button" class="btn-modern btn-primary" onclick="submitOrderModification()">
                         <i class="fas fa-check"></i> Modify Order
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- All NSE/BSE Stocks Modal -->
+    <div class="modal fade" id="stocksUniverseModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-list modal-icon"></i>
+                        <h5>All NSE & BSE Stocks</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+                        <select class="form-select form-select-sm" id="stocks-universe-exchange" style="max-width: 120px;" onchange="loadStocksUniversePage(0)">
+                            <option value="">All</option>
+                            <option value="NSE">NSE</option>
+                            <option value="BSE">BSE</option>
+                        </select>
+                        <input type="text" class="form-control form-control-sm" id="stocks-universe-search" placeholder="Search by name or symbol..." style="max-width: 220px;" onkeyup="if(event.key==='Enter') loadStocksUniversePage(0)">
+                        <button class="btn-modern btn-primary btn-sm" onclick="loadStocksUniversePage(0)">
+                            <i class="fas fa-search"></i> Search
+                        </button>
+                        <span class="text-muted small ms-2" id="stocks-universe-total">—</span>
+                    </div>
+                    <div class="table-responsive" style="max-height: 60vh;">
+                        <table class="table table-sm table-hover">
+                            <thead class="table-light sticky-top">
+                                <tr>
+                                    <th>Ticker</th>
+                                    <th>Exchange</th>
+                                    <th>Name</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stocks-universe-tbody">
+                                <tr><td colspan="4" class="text-center text-muted">Click Search to load.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mt-2">
+                        <button class="btn-modern btn-secondary btn-sm" id="stocks-universe-prev" onclick="loadStocksUniversePage(stocksUniverseOffset - stocksUniverseLimit)" disabled>Previous</button>
+                        <span class="small text-muted" id="stocks-universe-range">—</span>
+                        <button class="btn-modern btn-secondary btn-sm" id="stocks-universe-next" onclick="loadStocksUniversePage(stocksUniverseOffset + stocksUniverseLimit)">Next</button>
+                    </div>
                 </div>
             </div>
         </div>

@@ -220,3 +220,8 @@ def reset_trading_mode_manager():
     global _trading_mode_manager
     with _manager_lock:
         _trading_mode_manager = None
+
+
+def get_trading_mode() -> TradingMode:
+    """Get current trading mode (convenience function for backward compatibility)"""
+    return get_trading_mode_manager().get_mode()

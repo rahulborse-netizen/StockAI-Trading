@@ -273,6 +273,24 @@ body.modal-open .mobile-overlay {
     pointer-events: none !important;
 }
 
+/* Ensure navigation tabs are always clickable */
+.navbar-modern .nav-tabs-container,
+.navbar-modern .nav-tab {
+    pointer-events: auto !important;
+    z-index: 1002 !important;
+}
+
+/* Prevent any overlays from blocking tabs */
+.navbar-modern::before,
+.navbar-modern::after {
+    pointer-events: none !important;
+}
+
+.nav-container::before,
+.nav-container::after {
+    pointer-events: none !important;
+}
+
 /* ============================================
    BUTTONS - GLOBAL STYLES
    ============================================ */

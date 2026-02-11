@@ -3,6 +3,9 @@
 let currentTab = 'holdings';
 let holdingsData = [];
 let selectedStock = null;
+let signalsRefreshInterval = null;
+let stocksUniverseOffset = 0;
+let stocksUniverseLimit = 200;
 
 // Make setTheme available globally (defined in dashboard.js)
 // This ensures it's available when trading-platform.js loads
@@ -493,11 +496,31 @@ async function loadTopStocks() {
         const response = await fetch('/api/top_stocks');
         const stocks = await response.json();
         
-        const pricesResponse = await fetch('/api/prices');
-        const prices = await pricesResponse.json();
+        if (!stocks || stocks.length === 0) {
+            console.warn('No stocks returned from /api/top_stocks');
+            const container = document.getElementById('stock-list-container');
+            if (container) {
+                container.innerHTML = '<div class="empty-state"><p>No stocks available</p></div>';
+            }
+            return;
+        }
+        
+        // Fetch prices for top stocks
+        let prices = {};
+        try {
+            const pricesResponse = await fetch('/api/prices?for_top_stocks=true');
+            if (pricesResponse.ok) {
+                prices = await pricesResponse.json();
+            }
+        } catch (priceError) {
+            console.warn('Error fetching prices, using defaults:', priceError);
+        }
         
         const container = document.getElementById('stock-list-container');
-        if (!container) return;
+        if (!container) {
+            console.warn('stock-list-container element not found');
+            return;
+        }
         
         container.innerHTML = stocks.map(stock => {
             const price = prices[stock.ticker];
@@ -517,10 +540,19 @@ async function loadTopStocks() {
             `;
         }).join('');
         
-        document.getElementById('top-stocks-count').textContent = stocks.length;
+        const countEl = document.getElementById('top-stocks-count');
+        if (countEl) {
+            countEl.textContent = stocks.length;
+        }
+        
+        console.log(`Loaded ${stocks.length} stocks into sidebar`);
         
     } catch (error) {
         console.error('Error loading top stocks:', error);
+        const container = document.getElementById('stock-list-container');
+        if (container) {
+            container.innerHTML = `<div class="empty-state"><p>Error loading stocks: ${error.message}</p></div>`;
+        }
     }
 }
 
@@ -576,22 +608,39 @@ async function recordPortfolioSnapshot() {
     }
 }
 
-function switchTab(tabName) {
+// Make switchTab globally available
+window.switchTab = function switchTab(tabName) {
+    console.log('[TAB] Switching to tab:', tabName);
     currentTab = tabName;
     
-    // Update tab buttons
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+    // Clear signals auto-refresh when leaving signals tab
+    if (signalsRefreshInterval) {
+        clearInterval(signalsRefreshInterval);
+        signalsRefreshInterval = null;
+    }
+    
+    // Update tab buttons - support both .tab-btn and .nav-tab classes
+    const tabButtons = document.querySelectorAll('.tab-btn, .nav-tab');
+    console.log('[TAB] Found', tabButtons.length, 'tab buttons');
+    
+    tabButtons.forEach(btn => {
         btn.classList.remove('active');
-        if (btn.dataset.tab === tabName) {
+        const tabValue = btn.dataset.tab || btn.getAttribute('data-tab');
+        if (tabValue === tabName) {
             btn.classList.add('active');
+            console.log('[TAB] Activated button:', tabValue);
         }
     });
     
     // Update tab content
-    document.querySelectorAll('.tab-content').forEach(content => {
+    const tabContents = document.querySelectorAll('.tab-content');
+    console.log('[TAB] Found', tabContents.length, 'tab contents');
+    
+    tabContents.forEach(content => {
         content.classList.remove('active');
         if (content.id === `tab-${tabName}`) {
             content.classList.add('active');
+            console.log('[TAB] Activated content:', content.id);
         }
     });
     
@@ -612,6 +661,10 @@ function switchTab(tabName) {
     } else if (tabName === 'signals') {
         // Auto-load signals when signals tab is opened
         loadSignals();
+        // Auto-refresh signals every 90 seconds while on this tab
+        signalsRefreshInterval = setInterval(function() {
+            if (currentTab === 'signals' && (typeof loadSignals === 'function')) loadSignals();
+        }, 90000);
     } else if (tabName === 'trade-plans') {
         if (typeof loadTradePlans === 'function') {
             loadTradePlans();
@@ -830,6 +883,11 @@ const POPULAR_STOCKS = [
     'ICICIBANK.NS', 'BHARTIARTL.NS', 'SBIN.NS', 'BAJFINANCE.NS', 'LICI.NS',
     'ITC.NS', 'LT.NS', 'HCLTECH.NS', 'AXISBANK.NS', 'MARUTI.NS'
 ];
+
+function setSignalsLastUpdated() {
+    const el = document.getElementById('signals-last-updated');
+    if (el) el.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+}
 
 async function loadSignals() {
     const container = document.getElementById('signals-container');
@@ -1056,6 +1114,7 @@ async function loadSignals() {
                 }).join('')}
             </div>
         `;
+        setSignalsLastUpdated();
     } catch (error) {
         console.error('Error loading signals:', error);
         container.innerHTML = `
@@ -1162,6 +1221,7 @@ async function showIndexSignals() {
                 }).join('')}
             </div>
         `;
+        setSignalsLastUpdated();
         
     } catch (error) {
         console.error('Error loading index signals:', error);
@@ -1532,6 +1592,7 @@ async function loadAdaptiveEliteSignals() {
         
         html += '</div>';
         container.innerHTML = html;
+        setSignalsLastUpdated();
         
     } catch (error) {
         console.error('Error loading adaptive elite signals:', error);
@@ -1667,6 +1728,67 @@ function toggleMobileSidebar() {
         } else {
             document.body.style.overflow = '';
         }
+    }
+}
+
+// --- All NSE/BSE Stocks modal ---
+function openStocksUniverseModal() {
+    stocksUniverseOffset = 0;
+    const modal = new (window.bootstrap && window.bootstrap.Modal)(document.getElementById('stocksUniverseModal'));
+    modal.show();
+    loadStocksUniversePage(0);
+}
+
+async function loadStocksUniversePage(offset) {
+    const tbody = document.getElementById('stocks-universe-tbody');
+    const totalEl = document.getElementById('stocks-universe-total');
+    const rangeEl = document.getElementById('stocks-universe-range');
+    const prevBtn = document.getElementById('stocks-universe-prev');
+    const nextBtn = document.getElementById('stocks-universe-next');
+    if (!tbody) return;
+
+    const exchange = document.getElementById('stocks-universe-exchange') && document.getElementById('stocks-universe-exchange').value;
+    const search = document.getElementById('stocks-universe-search') && document.getElementById('stocks-universe-search').value;
+
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>';
+    try {
+        const params = new URLSearchParams({ limit: stocksUniverseLimit, offset: String(offset >= 0 ? offset : 0) });
+        if (exchange) params.set('exchange', exchange);
+        if (search) params.set('search', search);
+        const res = await fetch('/api/stocks/universe?' + params.toString());
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load stocks');
+
+        stocksUniverseOffset = offset >= 0 ? offset : 0;
+        const total = data.total || 0;
+        const stocks = data.stocks || [];
+
+        totalEl.textContent = total + ' stock(s)';
+        rangeEl.textContent = total === 0 ? '—' : (stocksUniverseOffset + 1) + '–' + Math.min(stocksUniverseOffset + stocksUniverseLimit, total) + ' of ' + total;
+        prevBtn.disabled = stocksUniverseOffset <= 0;
+        nextBtn.disabled = stocksUniverseOffset + stocksUniverseLimit >= total;
+
+        if (stocks.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No stocks found.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = stocks.map(s => {
+            const ticker = s.ticker || (s.tradingsymbol + (s.exchange === 'BSE' ? '.BO' : '.NS'));
+            return '<tr><td><code>' + (s.ticker || ticker) + '</code></td><td>' + (s.exchange || '') + '</td><td>' + (s.name || s.tradingsymbol || '') + '</td><td><button class="btn-modern btn-primary btn-sm" onclick="addToWatchlistFromUniverse(\'' + ticker.replace(/'/g, "\\'") + '\'); document.getElementById(\'stocksUniverseModal\').querySelector(\'[data-bs-dismiss=modal]\').click();">Add to watchlist</button></td></tr>';
+        }).join('');
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-danger">' + (e.message || 'Error loading stocks') + '</td></tr>';
+        if (totalEl) totalEl.textContent = '—';
+        if (rangeEl) rangeEl.textContent = '—';
+    }
+}
+
+function addToWatchlistFromUniverse(ticker) {
+    if (typeof addToWatchlist === 'function') {
+        addToWatchlist(ticker);
+    } else {
+        fetch('/api/watchlist/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker: ticker }) })
+            .then(r => r.json()).then(d => { if (d.error) showNotification(d.error, 'error'); else showNotification('Added ' + ticker, 'success'); });
     }
 }
 

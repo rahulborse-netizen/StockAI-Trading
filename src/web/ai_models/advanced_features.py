@@ -110,6 +110,159 @@ def compute_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     return obv
 
 
+def compute_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, 
+                 group_by_date: bool = True) -> pd.Series:
+    """
+    Compute Volume Weighted Average Price (VWAP).
+    
+    Args:
+        high: High prices
+        low: Low prices
+        close: Close prices
+        volume: Volume
+        group_by_date: If True, resets VWAP at start of each trading day
+    
+    Returns:
+        VWAP series
+    """
+    typical_price = (high + low + close) / 3
+    price_volume = typical_price * volume
+    
+    if group_by_date and isinstance(high.index, pd.DatetimeIndex):
+        # Reset VWAP at start of each day
+        vwap = price_volume.groupby(high.index.date).cumsum() / volume.groupby(high.index.date).cumsum()
+    else:
+        # Cumulative VWAP
+        vwap = price_volume.cumsum() / volume.cumsum()
+    
+    return vwap
+
+
+def compute_opening_range(high: pd.Series, low: pd.Series, close: pd.Series, 
+                        volume: pd.Series, minutes: int = 15) -> pd.DataFrame:
+    """
+    Compute opening range breakout features.
+    
+    Args:
+        high: High prices
+        low: Low prices
+        close: Close prices
+        volume: Volume
+        minutes: Opening range duration in minutes (default: 15)
+    
+    Returns:
+        DataFrame with opening range features
+    """
+    if not isinstance(high.index, pd.DatetimeIndex):
+        # If not datetime index, return empty features
+        return pd.DataFrame({
+            'or_high': pd.Series(index=high.index),
+            'or_low': pd.Series(index=high.index),
+            'or_range': pd.Series(index=high.index),
+            'or_breakout_up': pd.Series(index=high.index),
+            'or_breakout_down': pd.Series(index=high.index),
+            'or_volume': pd.Series(index=high.index)
+        })
+    
+    # Group by date
+    daily_groups = high.groupby(high.index.date)
+    
+    or_high = pd.Series(index=high.index, dtype=float)
+    or_low = pd.Series(index=high.index, dtype=float)
+    or_range = pd.Series(index=high.index, dtype=float)
+    or_breakout_up = pd.Series(index=high.index, dtype=bool)
+    or_breakout_down = pd.Series(index=high.index, dtype=bool)
+    or_volume = pd.Series(index=high.index, dtype=float)
+    
+    for date, group_indices in daily_groups.groups.items():
+        day_data = high.loc[group_indices]
+        
+        # Get first N minutes (assuming intraday data)
+        # For daily data, use first bar
+        if len(day_data) > 0:
+            # Simplified: use first bar as opening range
+            or_start_idx = day_data.index[0]
+            or_end_idx = day_data.index[min(minutes, len(day_data) - 1)]
+            
+            or_high.loc[or_start_idx:or_end_idx] = high.loc[or_start_idx:or_end_idx].max()
+            or_low.loc[or_start_idx:or_end_idx] = low.loc[or_start_idx:or_end_idx].min()
+            or_range.loc[or_start_idx:or_end_idx] = or_high.loc[or_start_idx] - or_low.loc[or_start_idx]
+            or_volume.loc[or_start_idx:or_end_idx] = volume.loc[or_start_idx:or_end_idx].sum()
+            
+            # Check for breakouts after opening range
+            for idx in day_data.index:
+                if idx > or_end_idx:
+                    or_breakout_up.loc[idx] = high.loc[idx] > or_high.loc[or_start_idx]
+                    or_breakout_down.loc[idx] = low.loc[idx] < or_low.loc[or_start_idx]
+    
+    return pd.DataFrame({
+        'or_high': or_high,
+        'or_low': or_low,
+        'or_range': or_range,
+        'or_breakout_up': or_breakout_up.astype(float),
+        'or_breakout_down': or_breakout_down.astype(float),
+        'or_volume': or_volume
+    })
+
+
+def compute_volume_profile(high: pd.Series, low: pd.Series, close: pd.Series, 
+                          volume: pd.Series, bins: int = 20) -> pd.DataFrame:
+    """
+    Compute volume profile features (simplified version).
+    
+    Args:
+        high: High prices
+        low: Low prices
+        close: Close prices
+        volume: Volume
+        bins: Number of price bins for volume profile
+    
+    Returns:
+        DataFrame with volume profile features
+    """
+    # Price range
+    price_range = high.max() - low.min()
+    bin_size = price_range / bins if bins > 0 else price_range
+    
+    # Volume-weighted price
+    typical_price = (high + low + close) / 3
+    vwap = (typical_price * volume).sum() / volume.sum() if volume.sum() > 0 else close.mean()
+    
+    # Price position relative to range
+    price_position = (close - low.min()) / price_range if price_range > 0 else 0.5
+    
+    # Volume concentration (simplified)
+    # Count how much volume is near current price
+    price_deviation = abs(typical_price - close) / close
+    volume_near_price = volume[price_deviation < 0.01].sum() / volume.sum() if volume.sum() > 0 else 0
+    
+    return pd.DataFrame({
+        'vp_vwap': vwap,
+        'vp_price_position': price_position,
+        'vp_volume_concentration': volume_near_price,
+        'vp_range': price_range,
+        'vp_bin_size': bin_size
+    }, index=high.index)
+
+
+def compute_intraday_momentum(close: pd.Series, volume: pd.Series, 
+                             window: int = 5) -> pd.Series:
+    """
+    Compute intraday momentum (price change weighted by volume).
+    
+    Args:
+        close: Close prices
+        volume: Volume
+        window: Lookback window
+    
+    Returns:
+        Intraday momentum series
+    """
+    price_change = close.diff(window)
+    volume_weighted_change = (price_change * volume.rolling(window).mean()) / volume.rolling(window).mean()
+    return volume_weighted_change.fillna(0)
+
+
 def compute_ichimoku(
     high: pd.Series,
     low: pd.Series,
@@ -239,6 +392,31 @@ def make_advanced_features(df: pd.DataFrame) -> pd.DataFrame:
         ichimoku = compute_ichimoku(out["high"], out["low"], out["close"])
         out = out.join(ichimoku)
     
+    # Intraday-specific features (VWAP, Opening Range, Volume Profile)
+    # Check if this is intraday data (has time component in index)
+    is_intraday = isinstance(out.index, pd.DatetimeIndex) and any(
+        pd.Timestamp(idx).time() != pd.Timestamp(idx).normalize().time() 
+        for idx in out.index[:min(10, len(out))]
+    )
+    
+    if is_intraday or len(out) > 100:  # Also compute for daily data as reference
+        # VWAP
+        vwap = compute_vwap(out["high"], out["low"], out["close"], out["volume"], group_by_date=is_intraday)
+        out["vwap"] = vwap
+        out["price_vwap_ratio"] = out["close"] / vwap.replace(0, np.nan)
+        out["price_vwap_diff"] = out["close"] - vwap
+        
+        # Opening Range
+        or_features = compute_opening_range(out["high"], out["low"], out["close"], out["volume"])
+        out = out.join(or_features)
+        
+        # Volume Profile
+        vp_features = compute_volume_profile(out["high"], out["low"], out["close"], out["volume"])
+        out = out.join(vp_features)
+        
+        # Intraday Momentum
+        out["intraday_momentum"] = compute_intraday_momentum(out["close"], out["volume"])
+    
     return out
 
 
@@ -282,5 +460,11 @@ def get_advanced_feature_columns() -> List[str]:
         # Ichimoku (if available)
         'ichimoku_tenkan', 'ichimoku_kijun',
         'ichimoku_senkou_a', 'ichimoku_senkou_b',
-        'ichimoku_cloud_top', 'ichimoku_cloud_bottom'
+        'ichimoku_cloud_top', 'ichimoku_cloud_bottom',
+        
+        # Intraday features (if available)
+        'vwap', 'price_vwap_ratio', 'price_vwap_diff',
+        'or_high', 'or_low', 'or_range', 'or_breakout_up', 'or_breakout_down', 'or_volume',
+        'vp_vwap', 'vp_price_position', 'vp_volume_concentration', 'vp_range', 'vp_bin_size',
+        'intraday_momentum'
     ]

@@ -12,15 +12,18 @@ from src.web.app import app
 
 if __name__ == '__main__':
     print("="*60)
-    print("AI Trading Dashboard")
+    print("AI Trading Dashboard (src.web.app)")
+    print("="*60)
+    print("Main dashboard:  http://localhost:5000")
+    print("Auto Trading:   http://localhost:5000/auto-trading")
     print("="*60)
     print("Starting web server...")
-    print("Open your browser and go to: http://localhost:5000")
     print("="*60)
     try:
         # Import socketio for WebSocket support
         from src.web.app import socketio
-        socketio.run(app, debug=True, host='0.0.0.0', port=5000, use_reloader=True)
+        # use_reloader=False to avoid duplicate processes and route issues
+        socketio.run(app, debug=True, host='0.0.0.0', port=5000, use_reloader=False)
     except Exception as e:
         print(f"Error starting server: {e}")
         print("\nTroubleshooting:")

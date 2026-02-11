@@ -1,0 +1,156 @@
+# Auto Trading Configuration
+# Configuration for automated intraday trading system
+
+# Signal Generation Settings
+signal:
+  # Minimum confidence threshold for trade execution (0.0 - 1.0)
+  confidence_threshold: 0.7
+  
+  # Timeframes to analyze
+  timeframes:
+    - '5m'
+    - '15m'
+    - '1h'
+    - '1d'
+  
+  # Use ensemble models
+  use_ensemble: true
+  
+  # Use multi-timeframe analysis
+  use_multi_timeframe: true
+
+# Position Management
+position:
+  # Maximum concurrent open positions
+  max_open_positions: 10
+  
+  # Maximum position size as percentage of portfolio (0.0 - 1.0)
+  max_position_size: 0.20
+  
+  # Minimum lot size
+  min_lot_size: 1
+  
+  # Maximum positions per symbol
+  max_positions_per_symbol: 1
+
+# Risk Management
+risk:
+  # Maximum risk per trade as percentage of portfolio (0.0 - 1.0)
+  max_risk_per_trade: 0.02
+  
+  # Maximum daily risk as percentage of portfolio (0.0 - 1.0)
+  max_daily_risk: 0.05
+  
+  # Maximum portfolio risk as percentage (0.0 - 1.0)
+  max_portfolio_risk: 0.30
+  
+  # Minimum risk-reward ratio
+  min_risk_reward_ratio: 1.5
+  
+  # Stop-loss percentage (if not specified in signal)
+  default_stop_loss_pct: 0.03
+  
+  # Take-profit percentage (if not specified in signal)
+  default_take_profit_pct: 0.05
+
+# Circuit Breakers
+circuit_breakers:
+  # Enable circuit breakers
+  enabled: true
+  
+  # Stop trading after N consecutive losses
+  max_consecutive_losses: 5
+  
+  # Stop trading if daily loss exceeds this percentage (0.0 - 1.0)
+  max_daily_loss_pct: 0.10
+  
+  # Stop trading if daily loss exceeds this amount (in rupees)
+  max_daily_loss_amount: 50000
+  
+  # Cooldown period after circuit breaker triggers (in minutes)
+  cooldown_minutes: 60
+
+# Market Hours
+market_hours:
+  # Trading session start time (IST)
+  open_time: "09:15"
+  
+  # Trading session end time (IST)
+  close_time: "15:30"
+  
+  # Pre-market scan time (IST)
+  pre_market_scan_time: "09:00"
+  
+  # Post-market cleanup time (IST)
+  post_market_cleanup_time: "15:45"
+
+# Scheduling
+scheduling:
+  # Signal generation interval during market hours (in seconds)
+  signal_generation_interval: 300  # 5 minutes
+  
+  # Trade execution interval during market hours (in seconds)
+  trade_execution_interval: 60  # 1 minute
+  
+  # Position monitoring interval (in seconds)
+  position_monitoring_interval: 30  # 30 seconds
+
+# Data Settings
+data:
+  # Cache TTL for different timeframes (in minutes)
+  cache_ttl:
+    '5m': 10
+    '15m': 30
+    '1h': 120
+    '1d': 1440
+  
+  # Lookback periods for different timeframes (in days)
+  lookback_periods:
+    '5m': 20
+    '15m': 30
+    '1h': 60
+    '1d': 365
+
+# Watchlist
+watchlist:
+  # Use watchlist only (if false, scans all stocks)
+  use_watchlist_only: false
+  
+  # Maximum stocks to scan per cycle
+  max_stocks_per_scan: 100
+  
+  # Watchlist size (top N signals from pre-market scan)
+  watchlist_size: 20
+
+# Trading Mode
+trading_mode:
+  # Default mode: 'paper' or 'live'
+  default_mode: 'paper'
+  
+  # Require confirmation before switching to live mode
+  require_confirmation_for_live: true
+
+# Logging
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: 'INFO'
+  
+  # Log all trades
+  log_all_trades: true
+  
+  # Log signal generation
+  log_signals: true
+  
+  # Log execution history
+  log_execution_history: true
+
+# Safety Features
+safety:
+  # Enable manual override (pause/resume from UI)
+  enable_manual_override: true
+  
+  # Require confirmation for high-value trades
+  require_confirmation_above_amount: 100000
+  
+  # Maximum order value per trade (in rupees)
+  max_order_value: 200000

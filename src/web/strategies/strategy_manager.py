@@ -3,7 +3,9 @@ Strategy Manager
 Manages multiple trading strategies and combines their signals
 """
 from typing import Dict, List, Optional
+from datetime import timedelta
 import logging
+import pandas as pd
 from .base_strategy import BaseStrategy, StrategyResult
 from .ml_strategy import MLStrategy
 from .mean_reversion_strategy import MeanReversionStrategy
@@ -137,14 +139,13 @@ class StrategyManager:
         Combine strategies using weighted average based on confidence
         
         Weights:
-        - ML Strategy: 0.4 (most reliable, trained on data)
-        - Mean Reversion: 0.3 (good in range-bound markets)
-        - Momentum: 0.3 (good in trending markets)
+        - ML: 0.3, Mean Reversion: 0.25, Momentum: 0.25, Adaptive Elite: 0.2
         """
         weights = {
-            'ml': 0.4,
-            'mean_reversion': 0.3,
-            'momentum': 0.3
+            'ml': 0.30,
+            'mean_reversion': 0.25,
+            'momentum': 0.25,
+            'adaptive_elite': 0.20
         }
         
         # Calculate signal scores: BUY=1, HOLD=0, SELL=-1
@@ -265,6 +266,60 @@ class StrategyManager:
                 'is_active': strategy_name == self.active_strategy if strategy_name else True
             }
         return {}
+
+    def get_market_data_for_ticker(self, ticker: str) -> Optional[Dict]:
+        """
+        Fetch OHLCV and build the market data dict required by quant strategies
+        (momentum, mean_reversion, ML, adaptive_elite).
+        """
+        try:
+            from src.research.data import download_yahoo_ohlcv
+            from src.web.strategies.adaptive_features import make_adaptive_features
+            from datetime import date
+
+            end_date = (date.today() - timedelta(days=1)).strftime('%Y-%m-%d')
+            start_date = (date.today() - timedelta(days=365)).strftime('%Y-%m-%d')
+            ohlcv = download_yahoo_ohlcv(
+                ticker=ticker,
+                start=start_date,
+                end=end_date,
+                interval='1d'
+            )
+            if not ohlcv or not hasattr(ohlcv, 'df') or ohlcv.df is None or len(ohlcv.df) < 50:
+                return None
+            df = ohlcv.df
+            enhanced_df, regime_info = make_adaptive_features(df)
+            latest = enhanced_df.iloc[-1]
+            current_price = float(latest.get('close', 0))
+            if current_price <= 0:
+                return None
+            price_std = float(df['close'].tail(20).std()) if len(df) >= 20 else current_price * 0.02
+            data = {
+                'ticker': ticker,
+                'current_price': current_price,
+                'ohlcv_df': enhanced_df,
+                'sma_10': float(latest.get('sma_10', current_price)),
+                'sma_20': float(latest.get('sma_20', current_price)),
+                'sma_50': float(latest.get('sma_50', current_price)),
+                'rsi_14': float(latest.get('rsi_14', 50)),
+                'macd': float(latest.get('macd', 0)),
+                'macd_signal': float(latest.get('macd_signal', 0)),
+                'macd_hist': float(latest.get('macd_hist', 0)),
+                'ret_5': float(latest.get('ret_5', 0)),
+                'ret_20': float(latest.get('ret_20', 0)),
+                'adx': float(latest.get('adx_14', 25)),
+                'price_std': price_std,
+                'bollinger_upper': float(latest.get('bb_upper', current_price * 1.05)),
+                'bollinger_lower': float(latest.get('bb_lower', current_price * 0.95)),
+                'volume': float(latest.get('volume', 0)),
+                'market_data': regime_info,
+            }
+            ret_1 = latest.get('ret_1', 0)
+            data['probability'] = max(0.0, min(1.0, 0.5 + float(ret_1) * 2))
+            return data
+        except Exception as e:
+            logger.debug(f"get_market_data_for_ticker({ticker}): {e}")
+            return None
 
 
 # Global singleton

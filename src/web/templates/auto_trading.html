@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto Trading Dashboard | StockAI Trading</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e27;
+            --bg-secondary: #1a1f3a;
+            --bg-tertiary: #252a45;
+            --border-color: #2a2f4a;
+            --text-primary: #e0e0e0;
+            --text-secondary: #888;
+            --accent-blue: #007bff;
+            --accent-green: #28a745;
+            --accent-red: #dc3545;
+            --accent-yellow: #ffc107;
+        }
+        
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+        }
+        
+        .dashboard-container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .page-header h1 {
+            margin: 0;
+            font-size: 2rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .page-header h1 i {
+            color: var(--accent-blue);
+        }
+        
+        .status-card {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .status-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .status-card h3 {
+            margin: 0 0 20px 0;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            margin-right: 10px;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-running { background: var(--accent-green); }
+        .status-stopped { background: var(--accent-red); }
+        .status-paused { background: var(--accent-yellow); }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .control-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .btn-action {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.95rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-action:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        .btn-start { 
+            background: var(--accent-green); 
+            color: white; 
+        }
+        .btn-start:hover { background: #218838; }
+        
+        .btn-stop { 
+            background: var(--accent-red); 
+            color: white; 
+        }
+        .btn-stop:hover { background: #c82333; }
+        
+        .btn-pause { 
+            background: var(--accent-yellow); 
+            color: #000; 
+        }
+        .btn-pause:hover { background: #e0a800; }
+        
+        .btn-reset { 
+            background: #6c757d; 
+            color: white;
+        }
+        .btn-reset:hover { background: #5a6268; }
+        .btn-secondary {
+            background: #17a2b8;
+            color: white;
+        }
+        .btn-secondary:hover { background: #138496; }
+        
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .metric {
+            background: var(--bg-tertiary);
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid var(--accent-blue);
+        }
+        
+        .metric-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .metric-value.positive { color: var(--accent-green); }
+        .metric-value.negative { color: var(--accent-red); }
+        
+        .signal-item {
+            background: var(--bg-tertiary);
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            border-left: 4px solid var(--accent-blue);
+            transition: all 0.2s;
+        }
+        
+        .signal-item:hover {
+            background: #2d3348;
+            transform: translateX(5px);
+        }
+        
+        .signal-buy { border-left-color: var(--accent-green); }
+        .signal-sell { border-left-color: var(--accent-red); }
+        .signal-hold { border-left-color: #6c757d; }
+        
+        .signal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .signal-ticker {
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+        
+        .signal-type {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .signal-type.BUY, .signal-type.STRONG_BUY {
+            background: rgba(40, 167, 69, 0.2);
+            color: var(--accent-green);
+        }
+        
+        .signal-type.SELL, .signal-type.STRONG_SELL {
+            background: rgba(220, 53, 69, 0.2);
+            color: var(--accent-red);
+        }
+        
+        .signal-type.HOLD {
+            background: rgba(108, 117, 125, 0.2);
+            color: #6c757d;
+        }
+        
+        .signal-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        th {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        tr:hover {
+            background: var(--bg-tertiary);
+        }
+        
+        .badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .badge-success { background: rgba(40, 167, 69, 0.2); color: var(--accent-green); }
+        .badge-danger { background: rgba(220, 53, 69, 0.2); color: var(--accent-red); }
+        .badge-warning { background: rgba(255, 193, 7, 0.2); color: var(--accent-yellow); }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-top: 20px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+        
+        .loading i {
+            font-size: 2rem;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        .alert {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid;
+        }
+        
+        .alert-info {
+            background: rgba(0, 123, 255, 0.1);
+            border-color: var(--accent-blue);
+            color: var(--text-primary);
+        }
+        
+        .alert-warning {
+            background: rgba(255, 193, 7, 0.1);
+            border-color: var(--accent-yellow);
+            color: var(--text-primary);
+        }
+        
+        .alert-danger {
+            background: rgba(220, 53, 69, 0.1);
+            border-color: var(--accent-red);
+            color: var(--text-primary);
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-weight: 600;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .tab:hover {
+            color: var(--text-primary);
+        }
+        
+        .tab.active {
+            color: var(--accent-blue);
+            border-bottom-color: var(--accent-blue);
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        @media (max-width: 768px) {
+            .metric-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .control-buttons {
+                flex-direction: column;
+            }
+            
+            .btn-action {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1>
+                <i class="fas fa-robot"></i>
+                Auto Trading Dashboard
+            </h1>
+            <div class="control-buttons">
+                <button class="btn-action btn-start" onclick="startAutoTrading()" id="btn-start">
+                    <i class="fas fa-play"></i> Start
+                </button>
+                <button class="btn-action btn-stop" onclick="stopAutoTrading()" id="btn-stop">
+                    <i class="fas fa-stop"></i> Stop
+                </button>
+                <button class="btn-action btn-pause" onclick="pauseAutoTrading()" id="btn-pause">
+                    <i class="fas fa-pause"></i> Pause
+                </button>
+                <button class="btn-action btn-reset" onclick="resetCircuitBreaker()" id="btn-reset">
+                    <i class="fas fa-redo"></i> Reset CB
+                </button>
+                <button class="btn-action btn-secondary" onclick="runScanNow()" id="btn-scan-now" title="Run one scan-and-execute cycle now">
+                    <i class="fas fa-search"></i> Run scan now
+                </button>
+            </div>
+        </div>
+        
+        <!-- System Status Alert -->
+        <div id="system-alert"></div>
+        
+        <!-- System Status Card -->
+        <div class="status-card">
+            <h3><i class="fas fa-info-circle"></i> System Status</h3>
+            <div class="metric-grid">
+                <div class="metric">
+                    <div class="metric-label">Auto Trading</div>
+                    <div class="metric-value">
+                        <span class="status-indicator status-stopped" id="status-indicator"></span>
+                        <span id="status-text">Stopped</span>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Market Status</div>
+                    <div class="metric-value" id="market-status">Checking...</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Upstox Connection</div>
+                    <div class="metric-value" id="upstox-status">Disconnected</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Trading Mode</div>
+                    <div class="metric-value" id="trading-mode">Paper</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Statistics Cards -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="status-card">
+                    <h3><i class="fas fa-chart-line"></i> Trading Statistics</h3>
+                    <div class="metric-grid">
+                        <div class="metric">
+                            <div class="metric-label">Signals Generated</div>
+                            <div class="metric-value" id="signals-generated">0</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Trades Executed</div>
+                            <div class="metric-value" id="trades-executed">0</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Trades Rejected</div>
+                            <div class="metric-value" id="trades-rejected">0</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Success Rate</div>
+                            <div class="metric-value" id="success-rate">0%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="status-card">
+                    <h3><i class="fas fa-shield-alt"></i> Risk Management</h3>
+                    <div class="metric-grid">
+                        <div class="metric">
+                            <div class="metric-label">Daily P&L</div>
+                            <div class="metric-value" id="daily-pnl">Rs 0.00</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Consecutive Losses</div>
+                            <div class="metric-value" id="consecutive-losses">0</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Circuit Breaker</div>
+                            <div class="metric-value" id="circuit-breaker-status">Inactive</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Open Positions</div>
+                            <div class="metric-value" id="open-positions">0</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Accuracy (30d)</div>
+                            <div class="metric-value" id="accuracy-30d">—</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Win rate (30d)</div>
+                            <div class="metric-value" id="win-rate-30d">—</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="status-card">
+            <h3><i class="fas fa-cog"></i> Algo Settings</h3>
+            <p class="text-muted small mb-2">From config (configs/trading_config.yaml). Restart auto trading to apply changes.</p>
+            <div class="mb-3">
+                <label class="form-label small">Signal source</label>
+                <select class="form-select form-select-sm" id="signal-source-select" style="max-width: 200px;" onchange="applySignalSource()">
+                    <option value="elite">ELITE (multi-timeframe)</option>
+                    <option value="quant">QUANT (active strategy)</option>
+                    <option value="quant_ensemble">QUANT ensemble (all strategies)</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label small">Active QUANT strategy</label>
+                <select class="form-select form-select-sm" id="active-quant-strategy-select" style="max-width: 200px;" onchange="applyActiveQuantStrategy()">
+                    <option value="ml">ML</option>
+                    <option value="momentum">Momentum</option>
+                    <option value="mean_reversion">Mean Reversion</option>
+                    <option value="adaptive_elite">Adaptive Elite</option>
+                </select>
+            </div>
+            <div class="metric-grid">
+                <div class="metric">
+                    <div class="metric-label">Confidence threshold</div>
+                    <div class="metric-value" id="algo-confidence">0.70</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Max positions</div>
+                    <div class="metric-value" id="algo-max-positions">10</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Daily loss limit (pct)</div>
+                    <div class="metric-value" id="algo-daily-loss-pct">10%</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Max consecutive losses</div>
+                    <div class="metric-value" id="algo-max-consec-losses">5</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Cooldown (min)</div>
+                    <div class="metric-value" id="algo-cooldown-min">60</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="status-card">
+            <h3><i class="fas fa-chart-line"></i> Backtest tuning</h3>
+            <p class="text-muted small mb-2">Run threshold sweep and strategy ranking on historical data. Apply results to set confidence threshold or active strategy (with safety cap).</p>
+            <div class="mb-3 d-flex flex-wrap gap-2 align-items-end">
+                <div>
+                    <label class="form-label small">Ticker</label>
+                    <input type="text" class="form-control form-control-sm" id="backtest-ticker" placeholder="e.g. RELIANCE.NS" style="width: 140px;">
+                </div>
+                <div>
+                    <label class="form-label small">Start</label>
+                    <input type="date" class="form-control form-control-sm" id="backtest-start" style="width: 140px;">
+                </div>
+                <div>
+                    <label class="form-label small">End</label>
+                    <input type="date" class="form-control form-control-sm" id="backtest-end" style="width: 140px;">
+                </div>
+                <button type="button" class="btn btn-action btn-primary" id="btn-run-backtest">
+                    <i class="fas fa-play"></i> Run backtest
+                </button>
+            </div>
+            <div id="backtest-results" class="d-none">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <h6 class="text-secondary">Threshold sweep</h6>
+                        <p class="small mb-1">Best threshold: <strong id="backtest-best-threshold">—</strong> (Sharpe: <span id="backtest-best-sharpe">—</span>)</p>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="btn-apply-threshold">Apply threshold</button>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-secondary">Strategy ranking</h6>
+                        <p class="small mb-1">Best strategy: <strong id="backtest-best-strategy">—</strong></p>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="btn-apply-strategy">Apply strategy</button>
+                    </div>
+                </div>
+                <div class="small text-muted" id="backtest-detail"></div>
+            </div>
+            <div id="backtest-loading" class="d-none">
+                <i class="fas fa-spinner fa-spin"></i> Running backtest...
+            </div>
+            <div id="backtest-error" class="d-none text-danger small"></div>
+            <div class="mt-3 pt-3 border-top border-secondary">
+                <h6 class="text-secondary">ELITE model retrain</h6>
+                <p class="small text-muted mb-2">Periodic retrain keeps the baseline model up to date. Run monthly or as needed.</p>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="btn-retrain-elite">
+                    <i class="fas fa-sync-alt"></i> Retrain ELITE baseline
+                </button>
+                <span id="retrain-status" class="ms-2 small"></span>
+            </div>
+        </div>
+        
+        <!-- Tabs for Different Views -->
+        <div class="status-card">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('signals')">Recent Signals</button>
+                <button class="tab" onclick="switchTab('executions')">Execution History</button>
+                <button class="tab" onclick="switchTab('positions')">Open Positions</button>
+                <button class="tab" onclick="switchTab('performance')">Performance</button>
+            </div>
+            
+            <!-- Signals Tab -->
+            <div id="tab-signals" class="tab-content active">
+                <div id="recent-signals">
+                    <div class="loading">
+                        <i class="fas fa-spinner"></i>
+                        <p>Loading signals...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Executions Tab -->
+            <div id="tab-executions" class="tab-content">
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Ticker</th>
+                                <th>Signal</th>
+                                <th>Probability</th>
+                                <th>Quantity</th>
+                                <th>Price</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="execution-history">
+                            <tr>
+                                <td colspan="7" class="text-center" style="padding: 40px; color: var(--text-secondary);">
+                                    <i class="fas fa-spinner fa-spin"></i> Loading...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Positions Tab -->
+            <div id="tab-positions" class="tab-content">
+                <div id="open-positions-list">
+                    <div class="loading">
+                        <i class="fas fa-spinner"></i>
+                        <p>Loading positions...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Performance Tab -->
+            <div id="tab-performance" class="tab-content">
+                <div class="chart-container">
+                    <canvas id="performance-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/auto-trading.js') }}"></script>
+</body>
+</html>

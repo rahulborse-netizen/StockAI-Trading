@@ -71,17 +71,31 @@ def _validate_ohlcv_data(df: pd.DataFrame, ticker: str) -> None:
             "(e.g., high < low). These may indicate data quality issues."
         )
 
-    # Check for large gaps (more than 5 trading days missing)
+    # Check for large gaps (timeframe-dependent)
     if len(df) > 1:
         date_diff = df.index.to_series().diff()
-        # Assuming daily data, 5+ days gap is suspicious
-        large_gaps = date_diff > pd.Timedelta(days=7)
-        if large_gaps.any():
-            gap_count = large_gaps.sum()
-            logger.warning(
-                f"{ticker}: Found {gap_count} gaps larger than 7 days. "
-                "This may indicate missing data or market holidays."
-            )
+        # Determine expected gap based on data frequency
+        # For daily data, gaps > 7 days are suspicious
+        # For intraday data, gaps > 1 day are suspicious (market closed)
+        # This is a simple heuristic - could be improved with actual interval detection
+        if len(df) > 10:
+            median_gap = date_diff.median()
+            # If median gap is < 1 day, likely intraday data
+            if median_gap < pd.Timedelta(days=1):
+                # Intraday: gaps > 1 day are suspicious
+                large_gaps = date_diff > pd.Timedelta(days=1)
+                gap_threshold = "1 day"
+            else:
+                # Daily: gaps > 7 days are suspicious
+                large_gaps = date_diff > pd.Timedelta(days=7)
+                gap_threshold = "7 days"
+            
+            if large_gaps.any():
+                gap_count = large_gaps.sum()
+                logger.warning(
+                    f"{ticker}: Found {gap_count} gaps larger than {gap_threshold}. "
+                    "This may indicate missing data or market holidays."
+                )
 
     # Check for zero or very small prices (might indicate stock split issues)
     very_small_prices = (df["close"] > 0) & (df["close"] < 0.01)
@@ -184,6 +198,12 @@ def save_cached_csv(ohlcv: OHLCV, path: Path) -> None:
     out.to_csv(path, index=False)
 
 
+def _is_intraday_interval(interval: str) -> bool:
+    """Check if interval is intraday (not daily or longer)"""
+    intraday_intervals = {'1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'}
+    return interval.lower() in intraday_intervals
+
+
 def download_yahoo_ohlcv(
     ticker: str,
     start: str,
@@ -197,6 +217,7 @@ def download_yahoo_ohlcv(
 ) -> OHLCV:
     """
     Download OHLCV data via Yahoo Finance with enhanced error handling and validation.
+    Supports both daily and intraday intervals (5m, 15m, 1h, etc.).
 
     Args:
         ticker: Yahoo Finance ticker symbol
@@ -205,7 +226,10 @@ def download_yahoo_ohlcv(
             - Indices: `^NSEI`, `^NSEBANK`, `^BSESN`
         start: Start date in YYYY-MM-DD format
         end: End date in YYYY-MM-DD format
-        interval: Data interval (default: "1d" for daily)
+        interval: Data interval
+            - Daily: "1d" (default)
+            - Intraday: "1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"
+            - Note: Intraday data limited to last 60 days by Yahoo Finance
         cache_path: Optional path to cache CSV file
         refresh: If True, re-download even if cache exists
         retries: Number of retry attempts (default: 3)
@@ -225,6 +249,17 @@ def download_yahoo_ohlcv(
     if not ticker:
         raise ValueError("Ticker cannot be empty")
     
+    # Validate interval
+    interval = interval.lower()
+    valid_intervals = {'1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '1wk', '1mo'}
+    if interval not in valid_intervals:
+        raise ValueError(
+            f"Invalid interval '{interval}'. "
+            f"Supported intervals: {', '.join(sorted(valid_intervals))}"
+        )
+    
+    is_intraday = _is_intraday_interval(interval)
+    
     # Validate and fix dates to prevent future date issues
     from datetime import datetime as dt
     try:
@@ -238,12 +273,39 @@ def download_yahoo_ohlcv(
             end = today_dt.strftime('%Y-%m-%d')
             end_dt = dt.strptime(end, '%Y-%m-%d')
         
+        # For intraday intervals, enforce 60-day limit
+        if is_intraday:
+            max_intraday_days = 60
+            days_diff = (end_dt - start_dt).days
+            if days_diff > max_intraday_days:
+                logger.warning(
+                    f"Intraday interval '{interval}' requested for {days_diff} days. "
+                    f"Yahoo Finance limits intraday data to {max_intraday_days} days. "
+                    f"Adjusting start date to {max_intraday_days} days before end date."
+                )
+                start_dt = end_dt - timedelta(days=max_intraday_days)
+                start = start_dt.strftime('%Y-%m-%d')
+            elif end_dt > today_dt:
+                # For intraday, end date should be today or earlier
+                end = today_dt.strftime('%Y-%m-%d')
+                end_dt = today_dt
+        
         # Ensure start < end
         if start_dt >= end_dt:
-            logger.warning(f"Start date {start} >= End date {end}! Adjusting start date.")
-            start = (end_dt - timedelta(days=365)).strftime('%Y-%m-%d')
+            if is_intraday:
+                # For intraday, default to last 20 days
+                default_days = 20
+                start_dt = end_dt - timedelta(days=default_days)
+                start = start_dt.strftime('%Y-%m-%d')
+                logger.warning(
+                    f"Start date {start} >= End date {end}! "
+                    f"Adjusting start date to {default_days} days before end date."
+                )
+            else:
+                logger.warning(f"Start date {start} >= End date {end}! Adjusting start date.")
+                start = (end_dt - timedelta(days=365)).strftime('%Y-%m-%d')
         
-        logger.info(f"Validated dates for {ticker}: {start} to {end}")
+        logger.info(f"Validated dates for {ticker} ({interval}): {start} to {end}")
     except Exception as date_err:
         logger.error(f"Date validation error: {date_err}. Using dates as-is: {start} to {end}")
 

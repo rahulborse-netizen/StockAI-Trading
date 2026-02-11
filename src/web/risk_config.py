@@ -23,6 +23,24 @@ DEFAULT_RISK_CONFIG = {
     'min_lot_size': 1,  # Minimum lot size (can be instrument-specific)
     'min_risk_reward_ratio': 1.5,  # Minimum risk-reward ratio
     'max_open_positions': 10,  # Maximum number of open positions
+    # Auto-trading / algo parameters
+    'confidence_threshold': 0.70,  # Min signal confidence to execute (0–1)
+    'daily_loss_limit_pct': 0.10,  # Circuit breaker: stop if daily loss >= 10% of portfolio
+    'daily_loss_limit_amount': 50000.0,  # Circuit breaker: stop if daily loss >= Rs
+    'max_consecutive_losses': 5,  # Circuit breaker: stop after N consecutive losing trades
+    'cooldown_minutes': 60,  # Minutes to wait before resuming after circuit breaker
+    # Signal source: 'elite' (multi-timeframe ELITE), 'quant' (strategy manager active), 'quant_ensemble' (combine all quant strategies)
+    'signal_source': 'elite',
+    'quant_ensemble_method': 'weighted_average',  # when signal_source is quant_ensemble: weighted_average | voting | best_performer
+    'min_accuracy': 0.0,  # Circuit breaker: pause if 30-day accuracy below this (0 = disabled)
+    'use_adaptive_threshold': False,  # If True, require higher confidence when recent accuracy < 0.5
+    'adaptive_threshold_floor': 0.75,  # Min confidence when accuracy is poor (when use_adaptive_threshold)
+    # Regime-aware confidence thresholds (when use_regime_thresholds is True)
+    'use_regime_thresholds': False,
+    'confidence_threshold_ranging': 0.75,  # Higher in RANGING (more false signals)
+    'confidence_threshold_trending': 0.65,   # Lower in STRONG_TREND / WEAK_TREND when trend confirms
+    # Per-ticker cooldown after a losing trade (hours to skip new signals for that ticker)
+    'cooldown_hours_after_ticker_loss': 24,   # 0 = disabled
 }
 
 _risk_config = None

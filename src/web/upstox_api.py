@@ -83,6 +83,11 @@ class UpstoxAPI:
                 error_text = response.text
                 logger.error(f"[ERROR] Authentication failed: {response.status_code}")
                 logger.error(f"[ERROR] Response: {error_text}")
+                
+                # Store error details for callback handler
+                error_code = 'Unknown'
+                error_message = f'HTTP {response.status_code}'
+                
                 # Try to parse error details
                 try:
                     error_json = response.json()
@@ -90,17 +95,29 @@ class UpstoxAPI:
                     # Check for specific Upstox error codes
                     if 'errors' in error_json:
                         for err in error_json.get('errors', []):
-                            error_code = err.get('errorCode', '')
-                            error_msg = err.get('message', '')
-                            logger.error(f"[ERROR] Upstox Error: {error_code} - {error_msg}")
-                            if error_code == 'UDAP1100016':
+                            error_code = err.get('errorCode', 'Unknown')
+                            error_message = err.get('message', 'Unknown error')
+                            logger.error(f"[ERROR] Upstox Error: {error_code} - {error_message}")
+                            if error_code == 'UDAP1100016' or error_code == 'UDAPI100068':
                                 logger.error(f"[ERROR] Invalid Credentials - This usually means:")
                                 logger.error(f"[ERROR] 1. Redirect URI mismatch (most common)")
                                 logger.error(f"[ERROR] 2. API Key/Secret mismatch")
                                 logger.error(f"[ERROR] 3. Redirect URI in Portal: Check Upstox Developer Portal")
                                 logger.error(f"[ERROR] 4. Redirect URI we're using: {self.redirect_uri}")
+                    elif 'error' in error_json:
+                        error_code = error_json.get('error', 'Unknown')
+                        error_message = error_json.get('error_description', str(error_json))
                 except:
-                    pass
+                    # If JSON parsing fails, use raw text
+                    error_message = error_text[:200]
+                
+                # Store error for callback handler to access
+                self._last_error = {
+                    'error_code': error_code,
+                    'error_message': error_message,
+                    'status_code': response.status_code,
+                    'response_text': error_text[:500]
+                }
             return False
         except Exception as e:
             print(f"[ERROR] Authentication exception: {e}")
@@ -188,16 +205,20 @@ class UpstoxAPI:
                 'profile': None
             }
     
-    def get_profile(self) -> Dict:
-        """Get user profile with timeout"""
+    def get_profile(self, timeout: int = 15) -> Dict:
+        """Get user profile with configurable timeout"""
         try:
             url = f"{self.BASE_URL}/user/profile"
-            response = self.session.get(url, timeout=10)  # 10 second timeout
+            response = self.session.get(url, timeout=timeout)
             if response.status_code == 200:
                 return response.json()
-            return {'error': f'Status {response.status_code}', 'response': response.text[:200]}
+            elif response.status_code == 401:
+                return {'error': 'Unauthorized - Invalid or expired access token. Please reconnect.', 'status_code': 401}
+            elif response.status_code == 403:
+                return {'error': 'Forbidden - Redirect URI mismatch. Please verify redirect URI in Upstox Portal matches exactly: ' + self.redirect_uri, 'status_code': 403}
+            return {'error': f'Status {response.status_code}', 'response': response.text[:200], 'status_code': response.status_code}
         except requests.exceptions.Timeout:
-            return {'error': 'Connection timeout - Upstox API took too long to respond. Please check your internet connection.'}
+            return {'error': 'Connection timeout - Upstox API took too long to respond. This might indicate:\n1. Network issues\n2. Upstox API is slow\n3. Redirect URI mismatch\n\nPlease verify redirect URI in Upstox Portal: ' + self.redirect_uri}
         except requests.exceptions.ConnectionError:
             return {'error': 'Connection error - Cannot reach Upstox API. Please check your internet connection.'}
         except Exception as e:
