@@ -45,9 +45,11 @@ htmlcov/
 # Project Specific
 cache/
 outputs/
+logs/
 data/*.json
 data/*.db
 data/models/
+data/signals/
 !data/watchlist.json
 *.log
 *.sqlite3

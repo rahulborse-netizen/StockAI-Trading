@@ -228,6 +228,18 @@
     flex-wrap: wrap;
 }
 
+.indices-connect-banner {
+    width: 100%;
+    padding: 0.5rem 1rem;
+    background: rgba(var(--primary-rgb, 59, 130, 246), 0.15);
+    border: 1px solid rgba(var(--primary-rgb, 59, 130, 246), 0.3);
+    border-radius: 8px;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+.indices-connect-banner i { margin-right: 0.5rem; }
+
 .index-item {
     display: flex;
     flex-direction: column;

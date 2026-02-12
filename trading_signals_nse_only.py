@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-STANDALONE TRADING SIGNAL GENERATOR - NSE API ONLY VERSION
-No Yahoo Finance - No SSL Issues!
-Single file - just run this to get buy/sell signals!
+STANDALONE TRADING SIGNAL GENERATOR
+Uses NSE API by default. For live data (avoids NSE blocking), use Upstox:
+
+  set UPSTOX_ACCESS_TOKEN=your_token   # Windows
+  export UPSTOX_ACCESS_TOKEN=your_token  # Linux/Mac
+  python trading_signals_nse_only.py --indices --intraday
+
+Get token: Connect Upstox in the web app (run_web.py) and copy from session,
+or use Upstox OAuth flow. Token can also be in .env as UPSTOX_ACCESS_TOKEN.
 
 Usage:
     python trading_signals_nse_only.py
     python trading_signals_nse_only.py --tickers RELIANCE TCS INFY
-    python trading_signals_nse_only.py --top-n 20
+    python trading_signals_nse_only.py --indices --intraday  # NIFTY, BANKNIFTY, SENSEX
 """
 
+import os
 import requests
 import pandas as pd
 import numpy as np
@@ -44,6 +51,142 @@ INDICES = {
     'NIFTYFMCG': 'NIFTY FMCG',
     'NIFTYPHARMA': 'NIFTY PHARMA'
 }
+
+
+# ============================================================================
+# UPSTOX DATA FETCHING (live data when NSE blocks)
+# ============================================================================
+
+def _get_upstox_token() -> Optional[str]:
+    """Get Upstox access token from env or .env file"""
+    token = os.environ.get('UPSTOX_ACCESS_TOKEN', '').strip()
+    if token:
+        return token
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        return os.environ.get('UPSTOX_ACCESS_TOKEN', '').strip() or None
+    except ImportError:
+        return None
+
+
+class UpstoxDataClient:
+    """Upstox API client for live quotes and historical data (no NSE restrictions)"""
+
+    def __init__(self, access_token: str):
+        self.access_token = access_token
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Authorization': f'Bearer {access_token}',
+            'Accept': 'application/json'
+        })
+        self._instrument_master = None
+        self._market_client = None
+
+    def _get_instrument_key(self, symbol: str) -> Optional[str]:
+        """Resolve symbol to Upstox instrument key"""
+        try:
+            if self._instrument_master is None:
+                import sys
+                from pathlib import Path
+                root = Path(__file__).resolve().parent
+                if str(root) not in sys.path:
+                    sys.path.insert(0, str(root))
+                from src.web.instrument_master import get_instrument_master
+                self._instrument_master = get_instrument_master()
+            sym = symbol.replace('.NS', '').replace('.BO', '').strip().upper()
+            return self._instrument_master.get_instrument_key(sym) or self._instrument_master.get_instrument_key(f'{sym}.NS')
+        except Exception:
+            return None
+
+    def get_quote(self, symbol: str) -> Optional[Dict]:
+        """Get live quote - returns same format as NSEClient"""
+        try:
+            inst_key = self._get_instrument_key(symbol)
+            if not inst_key:
+                return None
+            url = "https://api.upstox.com/v2/market-quote/quotes"
+            resp = self.session.get(url, params={'instrument_key': inst_key}, timeout=10)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if 'data' not in data or inst_key not in data['data']:
+                return None
+            q = data['data'][inst_key]
+            ohlc = q.get('ohlc', {})
+            last = float(q.get('last_price', 0) or 0)
+            close = float(ohlc.get('close', last) or last)
+            change = last - close if close > 0 else 0
+            change_pct = (change / close * 100) if close > 0 else 0
+            is_index = symbol.upper() in INDICES or any(x in symbol.upper() for x in ['NIFTY', 'BANKNIFTY', 'SENSEX'])
+            return {
+                'symbol': symbol.upper(),
+                'price': last,
+                'open': float(ohlc.get('open', last) or last),
+                'high': float(ohlc.get('high', last) or last),
+                'low': float(ohlc.get('low', last) or last),
+                'close': close,
+                'volume': int(q.get('volume', 0) or 0),
+                'change': change,
+                'change_pct': change_pct,
+                'name': symbol,
+                'is_index': is_index
+            }
+        except Exception:
+            return None
+
+    def get_historical_data(self, symbol: str, days: int = 60, intraday: bool = False) -> Optional[pd.DataFrame]:
+        """Get historical OHLC from Upstox"""
+        try:
+            inst_key = self._get_instrument_key(symbol)
+            if not inst_key:
+                return None
+            from urllib.parse import quote
+            interval = "1day"
+            if intraday:
+                interval = "5minute"
+            end_dt = datetime.now(IST)
+            start_dt = end_dt - timedelta(days=min(days, 365))
+            to_ts = end_dt.strftime("%Y-%m-%d")
+            from_ts = start_dt.strftime("%Y-%m-%d")
+            enc = quote(inst_key, safe="")
+            url = f"https://api.upstox.com/v2/historical-candle/{enc}/{interval}/{to_ts}"
+            resp = self.session.get(url, params={"from": from_ts}, timeout=30)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            candles = data.get("data", {}).get("candles") if isinstance(data, dict) else None
+            if not candles or not isinstance(candles, list):
+                return None
+            rows = []
+            for c in candles:
+                if isinstance(c, (list, tuple)) and len(c) >= 5:
+                    ts = c[0]
+                    dt = pd.to_datetime(ts, unit="s") if isinstance(ts, (int, float)) else pd.to_datetime(ts)
+                    rows.append({
+                        'date': dt,
+                        'open': float(c[1]),
+                        'high': float(c[2]),
+                        'low': float(c[3]),
+                        'close': float(c[4]),
+                        'volume': int(c[5]) if len(c) > 5 else 0
+                    })
+            if not rows:
+                return None
+            df = pd.DataFrame(rows).set_index('date').sort_index()
+            if intraday and len(df) > 0:
+                today = datetime.now(IST).date()
+                df_today = df[df.index.date == today]
+                if len(df_today) >= 10:
+                    return df_today
+                df = df.tail(50)
+            return df
+        except Exception:
+            return None
+
+    def get_intraday_data(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Get intraday 5m data"""
+        return self.get_historical_data(symbol, days=5, intraday=True)
 
 
 # ============================================================================
@@ -885,44 +1028,55 @@ def generate_signal(stock_data: Dict) -> Dict:
 # MAIN FUNCTIONS
 # ============================================================================
 
-def get_stock_data(ticker: str, nse_client: NSEClient, intraday: bool = False) -> Optional[Dict]:
-    """Get stock/index data from NSE"""
-    # Get live quote first
-    quote = nse_client.get_quote(ticker)
-    if not quote or quote.get('price', 0) <= 0:
-        return None
-    
-    is_index = quote.get('is_index', False)
-    
-    # Get historical/intraday data
-    if intraday:
-        # Try intraday data first
-        hist_df = nse_client.get_intraday_data(ticker)
-        min_data_points = 10  # Less data needed for intraday
-        
-        # If intraday fails, use recent daily data (workaround)
-        if hist_df is None or hist_df.empty or len(hist_df) < min_data_points:
-            hist_df = nse_client.get_historical_data(ticker, days=5, intraday=False)
-            min_data_points = 5  # Lower threshold for fallback
-    else:
-        hist_df = nse_client.get_historical_data(ticker, days=60, intraday=False)
-        min_data_points = 20  # More data needed for daily signals
-        
-        # If historical data fails, try shorter period
-        if hist_df is None or hist_df.empty or len(hist_df) < min_data_points:
-            hist_df = nse_client.get_historical_data(ticker, days=30, intraday=False)
-    
-    # If still no data, we can't generate accurate signals
+def get_stock_data(ticker: str, nse_client: NSEClient, intraday: bool = False, upstox_client: Optional[UpstoxDataClient] = None) -> Optional[Dict]:
+    """Get stock/index data - tries Upstox first if token available, else NSE"""
+    quote = None
+    hist_df = None
+    source = "NSE"
+
+    # Try Upstox first when token is available
+    if upstox_client:
+        quote = upstox_client.get_quote(ticker)
+        if quote and quote.get('price', 0) > 0:
+            if intraday:
+                hist_df = upstox_client.get_intraday_data(ticker)
+                if hist_df is None or hist_df.empty or len(hist_df) < 10:
+                    hist_df = upstox_client.get_historical_data(ticker, days=5, intraday=False)
+            else:
+                hist_df = upstox_client.get_historical_data(ticker, days=60, intraday=False)
+                if hist_df is None or hist_df.empty or len(hist_df) < 20:
+                    hist_df = upstox_client.get_historical_data(ticker, days=30, intraday=False)
+            if quote and hist_df is not None and not hist_df.empty:
+                min_pts = 5 if intraday else 20
+                if len(hist_df) >= min_pts:
+                    source = "Upstox"
+
+    # Fallback to NSE
+    if not quote or quote.get('price', 0) <= 0 or hist_df is None or hist_df.empty:
+        quote = nse_client.get_quote(ticker)
+        if not quote or quote.get('price', 0) <= 0:
+            return None
+        if intraday:
+            hist_df = nse_client.get_intraday_data(ticker)
+            min_data_points = 10
+            if hist_df is None or hist_df.empty or len(hist_df) < min_data_points:
+                hist_df = nse_client.get_historical_data(ticker, days=5, intraday=False)
+                min_data_points = 5
+        else:
+            hist_df = nse_client.get_historical_data(ticker, days=60, intraday=False)
+            min_data_points = 20
+            if hist_df is None or hist_df.empty or len(hist_df) < min_data_points:
+                hist_df = nse_client.get_historical_data(ticker, days=30, intraday=False)
+        source = "NSE"
+
     if hist_df is None or hist_df.empty:
         return None
-    
-    # For intraday, be more lenient with data requirements
-    if intraday and len(hist_df) >= 5:
-        # Use what we have
-        pass
-    elif len(hist_df) < min_data_points:
+
+    min_data_points = 5 if intraday else 20
+    if len(hist_df) < min_data_points:
         return None
-    
+
+    is_index = quote.get('is_index', False)
     return {
         'ticker': ticker,
         'historical': hist_df,
@@ -931,7 +1085,8 @@ def get_stock_data(ticker: str, nse_client: NSEClient, intraday: bool = False) -
         'volume': quote.get('volume', 0),
         'name': quote.get('name', ticker),
         'is_index': is_index,
-        'intraday': intraday
+        'intraday': intraday,
+        'source': source
     }
 
 
@@ -939,6 +1094,11 @@ def scan_stocks(tickers: List[str], min_confidence: float = 0.55, intraday: bool
     """Scan stocks/indices and generate signals"""
     signals = []
     nse_client = NSEClient()
+    upstox_client = None
+    token = _get_upstox_token()
+    if token:
+        upstox_client = UpstoxDataClient(token)
+        print("\n📡 Using Upstox for live data (UPSTOX_ACCESS_TOKEN set)")
     
     timeframe = "INTRADAY" if intraday else "DAILY"
     asset_type = "indices/stocks" if any(t.upper() in INDICES for t in tickers) else "stocks"
@@ -956,7 +1116,7 @@ def scan_stocks(tickers: List[str], min_confidence: float = 0.55, intraday: bool
             # Get stock/index data (with retry)
             stock_data = None
             for attempt in range(2):
-                stock_data = get_stock_data(ticker_clean, nse_client, intraday=intraday)
+                stock_data = get_stock_data(ticker_clean, nse_client, intraday=intraday, upstox_client=upstox_client)
                 if stock_data:
                     break
                 if attempt == 0:
@@ -993,7 +1153,9 @@ def scan_stocks(tickers: List[str], min_confidence: float = 0.55, intraday: bool
             if signal['confidence'] >= min_confidence:
                 signals.append(signal)
                 action_emoji = "🟢" if signal['action'] == 'BUY' else "🔴" if signal['action'] == 'SELL' else "⚪"
-                print(f"{action_emoji} {signal['action']} ({signal['confidence']:.0%})")
+                src = stock_data.get('source', '')
+                src_tag = f" [{src}]" if src else ""
+                print(f"{action_emoji} {signal['action']} ({signal['confidence']:.0%}){src_tag}")
             else:
                 print("⚪ HOLD")
             
@@ -1203,7 +1365,10 @@ Examples:
   # Intraday index trading (NIFTY, BANKNIFTY, SENSEX)
   python trading_signals_nse_only.py --indices --intraday
   python trading_signals_nse_only.py --tickers NIFTY BANKNIFTY --intraday
-  python trading_signals_nse_only.py --stocks NIFTY BANKNIFTY --intraday  # Same as --tickers
+  
+  # Use Upstox for live data (avoids NSE blocking)
+  set UPSTOX_ACCESS_TOKEN=your_token
+  python trading_signals_nse_only.py --indices --intraday
   
   # Higher confidence
   python trading_signals_nse_only.py --top-n 10 --min-confidence 0.60

@@ -83,10 +83,13 @@ class StockUniverse:
             
             all_stocks = []
             
+            def _sym(row):
+                return str(row.get('tradingsymbol') or row.get('trading_symbol') or row.get('symbol') or '').strip()
+
             # Process NSE stocks
             if nse_df is not None and not nse_df.empty:
                 for _, row in nse_df.iterrows():
-                    tradingsymbol = row.get('tradingsymbol', '')
+                    tradingsymbol = _sym(row)
                     if tradingsymbol:
                         ticker = f"{tradingsymbol}.NS"
                         all_stocks.append({
@@ -101,7 +104,7 @@ class StockUniverse:
             # Process BSE stocks
             if bse_df is not None and not bse_df.empty:
                 for _, row in bse_df.iterrows():
-                    tradingsymbol = row.get('tradingsymbol', '')
+                    tradingsymbol = _sym(row)
                     if tradingsymbol:
                         ticker = f"{tradingsymbol}.BO"
                         all_stocks.append({

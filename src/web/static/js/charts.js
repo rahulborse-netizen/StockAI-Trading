@@ -476,15 +476,24 @@ async function getStockSignal(symbol, ticker = null) {
     try {
         const stockTicker = ticker || convertSymbolToTicker(symbol);
         if (!stockTicker) {
-            return { signal: 'N/A', color: 'muted' };
+            return { signal: 'N/A', color: 'muted', hint: 'Ticker not found' };
         }
         
         const response = await fetch(`/api/signals/${encodeURIComponent(stockTicker)}`);
-        if (!response.ok) {
-            return { signal: 'N/A', color: 'muted' };
+        const signalData = await response.json();
+        
+        // Handle 200 with error (graceful degradation from API)
+        if (signalData.error && (signalData.signal === 'N/A' || !signalData.signal)) {
+            return {
+                signal: 'Data unavailable',
+                color: 'muted',
+                hint: signalData.hint || 'Connect Upstox for live data'
+            };
         }
         
-        const signalData = await response.json();
+        if (!response.ok) {
+            return { signal: 'N/A', color: 'muted', hint: 'Request failed' };
+        }
         
         if (signalData.signal === 'BUY') {
             return { signal: 'BUY', color: 'success', probability: signalData.probability };
@@ -495,6 +504,6 @@ async function getStockSignal(symbol, ticker = null) {
         }
     } catch (error) {
         console.error(`[Signal] Error getting signal for ${symbol}:`, error);
-        return { signal: 'N/A', color: 'muted' };
+        return { signal: 'N/A', color: 'muted', hint: 'Connect Upstox for live data' };
     }
 }

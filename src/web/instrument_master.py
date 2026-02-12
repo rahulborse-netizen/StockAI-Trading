@@ -2,21 +2,31 @@
 Upstox Instrument Master - Download and cache instrument mappings
 Maps NSE/BSE tickers to Upstox instrument_key for order placement
 """
+import gzip
+import io
+import json
 import requests
 import pandas as pd
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import logging
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# Upstox instrument master URLs (may require auth - using API search as fallback)
+# Upstox instrument master URLs (CSV and JSON gzip fallback)
 INSTRUMENT_MASTER_URLS = {
     'NSE_EQ': 'https://assets.upstox.com/market-quote/instruments/exchange/NSE_EQ.csv',
     'BSE_EQ': 'https://assets.upstox.com/market-quote/instruments/exchange/BSE_EQ.csv',
     'NSE_INDEX': 'https://assets.upstox.com/market-quote/instruments/exchange/NSE_INDEX.csv',
     'BSE_INDEX': 'https://assets.upstox.com/market-quote/instruments/exchange/BSE_INDEX.csv',
+}
+# JSON gzip fallback (better coverage, different column names)
+INSTRUMENT_JSON_URLS = {
+    'NSE_EQ': 'https://assets.upstox.com/market-quote/instruments/exchange/NSE_EQ.json.gz',
+    'BSE_EQ': 'https://assets.upstox.com/market-quote/instruments/exchange/BSE_EQ.json.gz',
+    'NSE_INDEX': 'https://assets.upstox.com/market-quote/instruments/exchange/NSE_INDEX.json.gz',
+    'BSE_INDEX': 'https://assets.upstox.com/market-quote/instruments/exchange/BSE_INDEX.json.gz',
 }
 
 # Comprehensive ticker mapping (expanded for common NSE stocks)
@@ -85,6 +95,13 @@ TICKER_MAP = {
     # Common ticker variations
     'HDFC.NS': 'NSE_EQ|INE040A01034',  # HDFC Bank
     'HDCF': 'NSE_EQ|INE040A01034',  # Common typo/variation
+    # Demat holdings (expanded for signal generation)
+    'IREDA.NS': 'NSE_EQ|INE202E01016',  # Indian Renewable Energy Development Agency
+    'NTPCGREEN.NS': 'NSE_EQ|INE0ONG01011',  # NTPC Green Energy (from Upstox)
+    'TEXRAIL.NS': 'NSE_EQ|INE778L01019',  # Texmaco Rail & Engineering
+    'URBANCO.NS': 'NSE_EQ|INE0CAZ01013',  # Urban Company (from Upstox)
+    'BSE.NS': 'NSE_EQ|INE118H01025',  # BSE Ltd
+    'FSL.NS': 'NSE_EQ|INE684F01012',  # Firstsource Solutions
 }
 
 CACHE_DIR = Path('data/instruments')
@@ -103,8 +120,12 @@ class InstrumentMaster:
         self._load_cached()
     
     def _get_cache_path(self, exchange: str) -> Path:
-        """Get cache file path for an exchange"""
+        """Get cache file path for an exchange (CSV)"""
         return self.cache_dir / f"{exchange}.csv"
+
+    def _get_json_cache_path(self, exchange: str) -> Path:
+        """Get cache file path for JSON instrument list"""
+        return self.cache_dir / f"{exchange}.json"
     
     def _is_cache_valid(self, cache_path: Path) -> bool:
         """Check if cache is still valid (not expired)"""
@@ -130,11 +151,12 @@ class InstrumentMaster:
         
         try:
             logger.info(f"Downloading instrument master for {exchange}...")
-            response = requests.get(url, timeout=30)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (compatible; StockAI-Trading/1.0)'}
+            response = requests.get(url, headers=headers, timeout=60)
             response.raise_for_status()
             
-            # Read CSV
-            df = pd.read_csv(url)
+            # Read CSV from response content (avoid double fetch)
+            df = pd.read_csv(io.BytesIO(response.content))
             logger.info(f"Downloaded {len(df)} instruments for {exchange}")
             
             # Cache it
@@ -157,18 +179,62 @@ class InstrumentMaster:
         except Exception as e:
             logger.error(f"Failed to download {exchange} instruments: {e}")
             return None
-    
+
+    def _download_instruments_json(self, exchange: str) -> Optional[pd.DataFrame]:
+        """Download instrument master JSON (gzip) as fallback when CSV fails"""
+        if exchange in self._download_failed:
+            return None
+        url = INSTRUMENT_JSON_URLS.get(exchange)
+        if not url:
+            return None
+        try:
+            logger.info(f"Downloading instrument master JSON for {exchange}...")
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (compatible; StockAI-Trading/1.0)'}
+            response = requests.get(url, headers=headers, timeout=90)
+            response.raise_for_status()
+            with gzip.GzipFile(fileobj=io.BytesIO(response.content), mode='rb') as gf:
+                data = json.load(gf)
+            if not isinstance(data, list):
+                data = data if isinstance(data, list) else []
+            rows = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                tradingsymbol = item.get('tradingsymbol') or item.get('trading_symbol', '')
+                inst_key = item.get('instrument_key') or item.get('instrument_token', '')
+                name = item.get('name') or item.get('symbol', '')
+                if tradingsymbol or inst_key:
+                    rows.append({
+                        'tradingsymbol': str(tradingsymbol).strip(),
+                        'instrument_key': inst_key,
+                        'instrument_token': inst_key,
+                        'name': str(name) if name else ''
+                    })
+            if not rows:
+                return None
+            df = pd.DataFrame(rows)
+            cache_path = self._get_json_cache_path(exchange)
+            df.to_csv(cache_path, index=False)
+            logger.info(f"Downloaded {len(df)} instruments (JSON) for {exchange}")
+            self._download_failed.discard(exchange)
+            return df
+        except Exception as e:
+            logger.warning(f"Failed to download JSON instruments for {exchange}: {e}")
+            return None
+
     def _load_cached(self):
-        """Load instruments from cache"""
+        """Load instruments from cache (CSV or JSON-derived CSV)"""
         for exchange in INSTRUMENT_MASTER_URLS.keys():
-            cache_path = self._get_cache_path(exchange)
-            if cache_path.exists():
-                try:
-                    df = pd.read_csv(cache_path)
-                    self._instruments[exchange] = df
-                    logger.info(f"Loaded {len(df)} cached instruments for {exchange}")
-                except Exception as e:
-                    logger.warning(f"Failed to load cache for {exchange}: {e}")
+            for cache_path in [self._get_cache_path(exchange), self._get_json_cache_path(exchange)]:
+                if cache_path.exists():
+                    try:
+                        df = pd.read_csv(cache_path)
+                        if not df.empty and ('tradingsymbol' in df.columns or 'trading_symbol' in df.columns or 'instrument_key' in df.columns):
+                            self._instruments[exchange] = df
+                            logger.info(f"Loaded {len(df)} cached instruments for {exchange}")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Failed to load cache for {exchange}: {e}")
     
     def _ensure_instruments(self, exchange: str) -> Optional[pd.DataFrame]:
         """Ensure instruments are loaded (from cache or download)"""
@@ -181,8 +247,10 @@ class InstrumentMaster:
         if exchange in self._download_failed:
             return None
         
-        # Cache expired or missing, download fresh
+        # Cache expired or missing, download fresh (CSV first, JSON fallback)
         df = self._download_instruments(exchange)
+        if df is None:
+            df = self._download_instruments_json(exchange)
         if df is not None:
             self._instruments[exchange] = df
         return df
@@ -264,14 +332,19 @@ class InstrumentMaster:
         
         df = self._ensure_instruments(exchange)
         if df is not None and not df.empty:
-            # Try exact match on tradingsymbol
-            if 'tradingsymbol' in df.columns:
-                match = df[df['tradingsymbol'].str.upper() == symbol]
-                if not match.empty:
-                    instrument_key = match.iloc[0].get('instrument_key') or match.iloc[0].get('instrument_token')
-                    if instrument_key:
-                        return instrument_key
-            
+            # Normalize symbol for matching (case-insensitive)
+            symbol_upper = symbol.upper()
+            # Try exact match on tradingsymbol (handle both column names)
+            sym_col = 'tradingsymbol' if 'tradingsymbol' in df.columns else ('trading_symbol' if 'trading_symbol' in df.columns else None)
+            if sym_col:
+                try:
+                    match = df[df[sym_col].astype(str).str.upper() == symbol_upper]
+                    if not match.empty:
+                        instrument_key = match.iloc[0].get('instrument_key') or match.iloc[0].get('instrument_token')
+                        if instrument_key:
+                            return instrument_key
+                except Exception:
+                    pass
             # Try partial match on name
             if 'name' in df.columns:
                 match = df[df['name'].str.contains(symbol, case=False, na=False)]

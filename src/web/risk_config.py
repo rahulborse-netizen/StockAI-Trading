@@ -63,14 +63,21 @@ def load_risk_config(config_path: Optional[Path] = None) -> Dict:
     
     if config_path.exists():
         try:
-            with open(config_path, 'r') as f:
-                if yaml:
-                    file_config = yaml.safe_load(f)
-                else:
-                    # Fallback: try JSON
-                    import json
-                    file_config = json.load(f)
-                if file_config and 'risk_management' in file_config:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                raw = f.read()
+            if not raw or not raw.strip():
+                logger.info(f"Risk config file {config_path} is empty. Using defaults.")
+            elif yaml:
+                file_config = yaml.safe_load(raw)
+                if file_config and isinstance(file_config, dict) and 'risk_management' in file_config:
+                    config.update(file_config['risk_management'])
+                    logger.info(f"Loaded risk config from {config_path}")
+            elif str(config_path).lower().endswith('.yaml') or str(config_path).lower().endswith('.yml'):
+                logger.warning(f"YAML file {config_path} requires PyYAML. Install with: pip install pyyaml. Using defaults.")
+            else:
+                import json
+                file_config = json.loads(raw)
+                if file_config and isinstance(file_config, dict) and 'risk_management' in file_config:
                     config.update(file_config['risk_management'])
                     logger.info(f"Loaded risk config from {config_path}")
         except Exception as e:

@@ -460,6 +460,14 @@
                         </div>
                     </div>
                     
+                    <!-- Signals source toggle: Demat / Watchlist / Both -->
+                    <div class="signals-source-row mb-2" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <span class="text-muted small">Signals for:</span>
+                        <button type="button" class="btn-modern btn-sm signals-source-btn active" data-source="demat" onclick="setSignalsSource('demat')">Demat holdings</button>
+                        <button type="button" class="btn-modern btn-sm btn-secondary signals-source-btn" data-source="watchlist" onclick="setSignalsSource('watchlist')">Watchlist</button>
+                        <button type="button" class="btn-modern btn-sm btn-secondary signals-source-btn" data-source="both" onclick="setSignalsSource('both')">Both</button>
+                    </div>
+                    
                     <!-- Stock Signals Section -->
                     <div class="signals-container" id="signals-container">
                         <div class="empty-state">

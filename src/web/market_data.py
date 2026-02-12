@@ -123,13 +123,23 @@ class MarketDataClient:
             response.raise_for_status()
             
             data = response.json()
-            if 'data' in data and instrument_key in data['data']:
-                quote = data['data'][instrument_key]
-                # Cache the quote
+            if 'data' not in data:
+                return None
+            quote_data = data['data']
+            quote = quote_data.get(instrument_key)
+            if quote is None and len(quote_data) == 1:
+                quote = next(iter(quote_data.values()))
+            if quote:
                 self.cache.cache_quote(instrument_key, quote)
                 return quote
             return None
-            
+
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401:
+                logger.warning(f"Upstox 401 for {instrument_key} - token may be expired. Reconnect or refresh token.")
+            if use_cache:
+                return self.cache.get_cached_quote(instrument_key)
+            return None
         except requests.exceptions.Timeout:
             logger.error(f"Timeout getting quote for {instrument_key}")
             # Return cached data if available as fallback

@@ -23,6 +23,45 @@ def _is_index_ticker(ticker: str) -> bool:
     return ticker.startswith("^")
 
 
+# Map index names to Yahoo tickers - never append .NS to these
+_YAHOO_INDEX_MAP = {
+    'nifty': '^NSEI',
+    'nifty50': '^NSEI',
+    'banknifty': '^NSEBANK',
+    'sensex': '^BSESN',
+    'vix': '^INDIAVIX',
+    'indiavix': '^INDIAVIX',
+    'niftysmallcap': '^CNXSMALLCAP',
+    'nifty100': '^CNX100',
+    'nifty500': '^CNX500',
+    'niftyit': '^CNXIT',
+    'niftyfmcg': '^CNXFMCG',
+    'niftypharma': '^CNXPHARMA',
+    'niftyauto': '^CNXAUTO',
+    'niftymetal': '^CNXMETAL',
+    'niftyenergy': '^CNXENERGY',
+    'niftyrealty': '^CNXREALTY',
+    'niftypsu': '^CNXPSU',
+    'niftymidcap': '^CNXMID',
+}
+
+
+def _yahoo_ticker(symbol: str) -> str:
+    """Return correct Yahoo ticker. Indices map to ^NSEI etc; NSE stocks get .NS."""
+    s = str(symbol or "").strip().lower()
+    if not s:
+        return s
+    if s.startswith("^"):
+        return symbol.strip()  # Preserve original case for ^
+    mapped = _YAHOO_INDEX_MAP.get(s)
+    if mapped:
+        return mapped
+    s_orig = str(symbol or "").strip()
+    if "." in s_orig:
+        return s_orig
+    return f"{s_orig}.NS"
+
+
 def _validate_ohlcv_data(df: pd.DataFrame, ticker: str) -> None:
     """
     Validate OHLCV data for gaps, outliers, and data quality issues.
@@ -244,8 +283,8 @@ def download_yahoo_ohlcv(
         RuntimeError: If download fails after all retries
         ValueError: If data validation fails or data is invalid
     """
-    # Validate ticker format
-    ticker = ticker.strip()
+    # Validate and normalize ticker for Yahoo Finance
+    ticker = _yahoo_ticker(ticker.strip())
     if not ticker:
         raise ValueError("Ticker cannot be empty")
     
@@ -321,12 +360,29 @@ def download_yahoo_ohlcv(
             logger.warning(f"Failed to load cache for {ticker}: {e}. Re-downloading...")
 
     import yfinance as yf
+    import requests
+
+    # SSL workaround: use requests session with certifi CA bundle (fixes curl 60 on Windows)
+    def _ssl_session(verify_ssl: bool = True):
+        s = requests.Session()
+        if verify_ssl:
+            try:
+                import certifi
+                s.verify = certifi.where()
+            except ImportError:
+                pass
+        else:
+            s.verify = False
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return s
 
     last_err: Exception | None = None
+    use_insecure_fallback = False
     for attempt in range(1, retries + 1):
         try:
+            session = _ssl_session(verify_ssl=not use_insecure_fallback)
             logger.info(f"Downloading {ticker} (attempt {attempt}/{retries})...")
-            
             df = yf.download(
                 tickers=ticker,
                 start=start,
@@ -334,8 +390,9 @@ def download_yahoo_ohlcv(
                 interval=interval,
                 auto_adjust=False,
                 progress=False,
-                threads=False,  # more stable on some networks
+                threads=False,
                 group_by="column",
+                session=session,
             )
             
             if df is not None and not df.empty:
@@ -353,13 +410,10 @@ def download_yahoo_ohlcv(
             logger.warning(
                 f"Attempt {attempt}/{retries} failed for {ticker}: {error_msg}"
             )
-            
-            # Provide helpful error messages for common issues
-            if "certificate" in error_msg.lower() or "ssl" in error_msg.lower():
-                logger.warning(
-                    "SSL certificate issue detected. Try: "
-                    "`python -m pip install --upgrade certifi`"
-                )
+            # On SSL/certificate error, try insecure fallback on next attempt (Windows workaround)
+            if "certificate" in error_msg.lower() or "ssl" in error_msg.lower() or "curl" in error_msg.lower():
+                logger.warning("SSL/certificate issue detected. Will retry with verify=False fallback.")
+                use_insecure_fallback = True
             elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
                 logger.warning("Network/connection issue detected. Will retry...")
         

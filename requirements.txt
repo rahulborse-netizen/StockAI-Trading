@@ -1,3 +1,5 @@
+certifi
+PyYAML
 numpy
 pandas
 scikit-learn

@@ -5,10 +5,21 @@ Provides UI/UX interface for monitoring, alerts, and order execution
 import sys
 import os
 
-# Add project root to Python path for imports
+# Add project root to Python path FIRST so imports work
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+# Fix SSL certificate before any HTTP calls (yfinance, requests)
+try:
+    from src.web import ssl_fix  # noqa: F401
+except ImportError:
+    try:
+        import certifi
+        os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+        os.environ.setdefault('REQUESTS_CA_BUNDLE', certifi.where())
+    except ImportError:
+        pass
 
 from flask import Flask, render_template, jsonify, request, session
 from datetime import datetime, timedelta
@@ -57,7 +68,7 @@ def get_financial_collector():
     return None
 def get_news_collector():
     return None
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 # Phase 2.1: Flask-SocketIO for WebSocket support
 from flask_socketio import SocketIO, emit
@@ -98,10 +109,32 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 init_websocket_handlers(socketio)
 
+_upstox_wired_to_intraday = False
+
+
 @app.before_request
 def make_session_permanent():
     """Make session permanent so it persists"""
     session.permanent = True
+    # Refresh Upstox token if expired (before any API calls)
+    try:
+        from src.web.upstox_connection import connection_manager
+        if session.get('upstox_access_token'):
+            connection_manager.refresh_token_if_needed()
+    except Exception:
+        pass
+    # Wire Upstox to IntradayDataManager when connected (covers server restart)
+    global _upstox_wired_to_intraday
+    if not _upstox_wired_to_intraday and connection_manager.is_connected():
+        try:
+            client = connection_manager.get_client()
+            if client and client.access_token:
+                from src.web.intraday_data_manager import get_intraday_data_manager
+                get_intraday_data_manager().set_upstox_client(client)
+                _upstox_wired_to_intraday = True
+                logger.debug("[Upstox] Wired to IntradayDataManager on request")
+        except Exception as e:
+            logger.debug(f"[Upstox] Wire to IntradayDataManager skipped: {e}")
 
 # Initialize managers
 watchlist_manager = WatchlistManager()
@@ -446,6 +479,19 @@ def get_signals(ticker):
         use_elite = request.args.get('elite', 'true').lower() == 'true'
         generate_plan = request.args.get('generate_plan', 'false').lower() == 'true'
         trading_type = request.args.get('trading_type', 'swing')
+        force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+        instrument_key = request.args.get('instrument_key', '').strip() or None  # From holdings - bypass instrument master
+        
+        # Serve from pre-computed cache first (unless refresh requested)
+        if not force_refresh:
+            try:
+                from src.web.signal_cache import get_cached_signal
+                cached = get_cached_signal(ticker)
+                if cached:
+                    logger.debug(f"[Signals] Serving {ticker} from cache")
+                    return jsonify(cached)
+            except Exception as cache_err:
+                logger.debug(f"[Signals] Cache check failed: {cache_err}")
         
         # Use ELITE signal generator if enabled
         if use_elite:
@@ -454,7 +500,8 @@ def get_signals(ticker):
                 signal_response = elite_generator.generate_signal(
                     ticker=ticker,
                     use_ensemble=True,
-                    use_multi_timeframe=True
+                    use_multi_timeframe=True,
+                    instrument_key_override=instrument_key
                 )
                 
                 # Check if signal_response is valid
@@ -491,16 +538,38 @@ def get_signals(ticker):
                             logger.warning(f"[Signals] Error generating trade plan: {plan_err}")
                             signal_response['trade_plan_error'] = str(plan_err)
                     
+                    # Cache successful signal for next time
+                    try:
+                        from src.web.signal_cache import set_cached_signal
+                        set_cached_signal(ticker, signal_response)
+                    except Exception:
+                        pass
                     return jsonify(signal_response)
                 elif signal_response and 'error' in signal_response:
-                    # ELITE returned an error, log it and fall through to basic
-                    logger.warning(f"[Signals] ELITE system returned error: {signal_response.get('error', 'Unknown error')}")
+                    # ELITE returned an error - return 200 with structured response (graceful degradation)
+                    hint = signal_response.get('hint') or 'Historical data unavailable. Connect Upstox or verify ticker symbol.'
+                    logger.warning(f"[Signals] ELITE system returned error: {signal_response.get('error', 'Unknown error')} - {hint}")
+                    return jsonify({
+                        'signal': 'N/A',
+                        'error': signal_response.get('error', 'Data unavailable'),
+                        'hint': hint,
+                        'ticker': ticker
+                    }), 200
                 else:
                     # ELITE returned None or invalid response
                     logger.warning(f"[Signals] ELITE system returned invalid response: {signal_response}")
             except Exception as elite_err:
                 logger.error(f"[Signals] ELITE system exception: {elite_err}", exc_info=True)
-                # Fall through to basic signal generation
+                # If data-related failure, return structured 200 (graceful degradation)
+                err_str = str(elite_err).lower()
+                if 'download' in err_str or 'ssl' in err_str or 'certificate' in err_str or 'data' in err_str or 'yahoo' in err_str:
+                    return jsonify({
+                        'signal': 'N/A',
+                        'error': 'Data unavailable',
+                        'hint': 'Historical data failed. Connect Upstox for live data or check ticker symbol.',
+                        'ticker': ticker
+                    }), 200
+                # Fall through to basic signal generation for other errors
         
         # Basic signal generation (fallback or if elite=false)
         # Get recent data - ensure dates are correct
@@ -546,12 +615,22 @@ def get_signals(ticker):
         except Exception as download_err:
             error_msg = f'Failed to download data for {ticker}: {str(download_err)}'
             logger.error(f"[Signals] {error_msg}")
-            return jsonify({'error': error_msg, 'ticker': ticker}), 404
+            return jsonify({
+                'signal': 'N/A',
+                'error': 'Data unavailable',
+                'hint': 'Connect Upstox for live data or check SSL/certifi setup',
+                'ticker': ticker
+            }), 200
         
         if ohlcv is None or len(ohlcv.df) == 0:
-            error_msg = f'No data available for ticker {ticker}. Please check if ticker is correct and try again.'
+            error_msg = f'No data available for ticker {ticker}.'
             logger.error(f"[Signals] {error_msg}")
-            return jsonify({'error': error_msg, 'ticker': ticker}), 404
+            return jsonify({
+                'signal': 'N/A',
+                'error': error_msg,
+                'hint': 'Connect Upstox for live data or check ticker symbol.',
+                'ticker': ticker
+            }), 200
         
         # Generate features and predictions
         feat_df = make_features(ohlcv.df.copy())
@@ -559,7 +638,12 @@ def get_signals(ticker):
         ml_df = clean_ml_frame(labeled_df, feature_cols=DEFAULT_FEATURE_COLS, label_col="label_up")
         
         if len(ml_df) < 50:
-            return jsonify({'error': 'Insufficient data'}), 404
+            return jsonify({
+                'signal': 'N/A',
+                'error': 'Insufficient data',
+                'hint': 'Need at least 50 days of historical data. Connect Upstox for live data.',
+                'ticker': ticker
+            }), 200
         
         # Train model
         train_df = ml_df.iloc[:-1].copy()
@@ -865,7 +949,12 @@ def generate_trade_plan():
         ml_df = clean_ml_frame(labeled_df, feature_cols=DEFAULT_FEATURE_COLS, label_col="label_up")
         
         if len(ml_df) < 50:
-            return jsonify({'error': 'Insufficient data'}), 404
+            return jsonify({
+                'signal': 'N/A',
+                'error': 'Insufficient data',
+                'hint': 'Need at least 50 days of historical data. Connect Upstox for live data.',
+                'ticker': ticker
+            }), 200
         
         # Train model
         train_df = ml_df.iloc[:-1].copy()
@@ -1205,8 +1294,13 @@ def check_trade_plan_risk(plan_id):
 
 @app.route('/api/prices')
 def get_prices():
-    """Get current prices for watchlist - Phase 2.1: Real-time data integration"""
-    watchlist = watchlist_manager.get_watchlist()
+    """Get current prices for watchlist - Phase 2.1: Real-time data integration.
+    Query: for_top_stocks=true | tickers=RELIANCE.NS,TCS.NS (comma-separated)"""
+    tickers_param = request.args.get('tickers', '').strip()
+    if tickers_param:
+        watchlist = [t.strip() for t in tickers_param.split(',') if t.strip()]
+    else:
+        watchlist = watchlist_manager.get_watchlist()
     prices = {}
     
     # Try to get real-time data from Upstox if connected
@@ -1248,28 +1342,22 @@ def get_prices():
             for ticker in watchlist:
                 prices[ticker] = _get_cached_price(ticker)
     else:
-        # Not connected to Upstox, fetch from Yahoo Finance or return empty prices
+        # Not connected to Upstox - use DataSourceManager (correct tickers, SSL, null handling)
         for ticker in watchlist:
             try:
-                # Try to get latest price from Yahoo Finance
-                import yfinance as yf
-                stock = yf.Ticker(ticker)
-                hist = stock.history(period="1d", interval="1m")
-                if not hist.empty:
-                    latest_price = float(hist['Close'].iloc[-1])
+                quote, _ = get_data_source_manager().get_quote(ticker, use_cache=True)
+                if quote and quote.get('current_price', 0) > 0:
                     prices[ticker] = {
-                        'price': latest_price,
-                        'change': 0,
-                        'change_pct': 0,
-                        'volume': int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0,
-                        'timestamp': datetime.now().isoformat()
+                        'price': quote['current_price'],
+                        'change': quote.get('change', 0),
+                        'change_pct': quote.get('change_pct', 0),
+                        'volume': int(quote.get('volume', 0)),
+                        'timestamp': quote.get('timestamp', datetime.now().isoformat())
                     }
                 else:
-                    # Fallback to cached data
                     prices[ticker] = _get_cached_price(ticker)
             except Exception as e:
-                logger.warning(f"Error fetching Yahoo Finance price for {ticker}: {e}")
-                # Fallback to cached data
+                logger.warning(f"Error fetching price for {ticker}: {e}")
                 prices[ticker] = _get_cached_price(ticker)
     
     # Also handle top_stocks prices if requested (for sidebar)
@@ -1283,20 +1371,14 @@ def get_prices():
             for ticker in top_stocks_tickers:
                 if ticker not in prices:
                     try:
-                        import yfinance as yf
-                        stock = yf.Ticker(ticker)
-                        hist = stock.history(period="2d")
-                        if not hist.empty:
-                            latest_price = float(hist['Close'].iloc[-1])
-                            prev_close = float(hist['Close'].iloc[-2]) if len(hist) > 1 else latest_price
-                            change = latest_price - prev_close
-                            change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+                        quote, _ = get_data_source_manager().get_quote(ticker, use_cache=True)
+                        if quote and quote.get('current_price', 0) > 0:
                             prices[ticker] = {
-                                'price': latest_price,
-                                'change': change,
-                                'change_pct': change_pct,
-                                'volume': int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0,
-                                'timestamp': datetime.now().isoformat()
+                                'price': quote['current_price'],
+                                'change': quote.get('change', 0),
+                                'change_pct': quote.get('change_pct', 0),
+                                'volume': int(quote.get('volume', 0)),
+                                'timestamp': quote.get('timestamp', datetime.now().isoformat())
                             }
                         else:
                             prices[ticker] = {
@@ -1689,6 +1771,9 @@ def connect_upstox():
             upstox_api = UpstoxAPI(api_key, api_secret, redirect_uri)
             upstox_api.set_access_token(access_token)
             connection_manager.save_connection(api_key, api_secret, redirect_uri, access_token)
+            # Wire Upstox to IntradayDataManager for live data during market hours
+            from src.web.intraday_data_manager import get_intraday_data_manager
+            get_intraday_data_manager().set_upstox_client(upstox_api)
             
             # Test connection with timeout handling (short timeout to avoid hanging)
             logger.info("[Phase 1.2] Testing connection with access token (10s timeout)...")
@@ -1973,6 +2058,9 @@ def upstox_callback():
         
         if auth_success:
             connection_manager.save_connection(api_key, api_secret, redirect_uri, upstox_api.access_token, refresh_token)
+            # Wire Upstox to IntradayDataManager for live data during market hours
+            from src.web.intraday_data_manager import get_intraday_data_manager
+            get_intraday_data_manager().set_upstox_client(upstox_api)
             
             # Test connection
             logger.info("[Phase 1.2] Testing profile fetch...")
@@ -2552,6 +2640,29 @@ def place_order():
     except Exception as e:
         return jsonify({'status': 'error', 'error': f'Order placement failed: {str(e)}'}), 500
 
+@app.route('/api/stocks/refresh', methods=['POST'])
+def refresh_stocks_universe():
+    """Refresh instrument master and stock universe (NSE/BSE). Call after connecting Upstox."""
+    try:
+        from src.web.instrument_master import get_instrument_master
+        from src.web.stock_universe import get_stock_universe
+        im = get_instrument_master()
+        im.refresh_cache()
+        su = get_stock_universe()
+        su._build_universe(force_refresh=True)
+        info = su.get_universe_info()
+        return jsonify({
+            'status': 'success',
+            'message': 'Instruments and stock universe refreshed',
+            'total_stocks': info.get('total_stocks', 0),
+            'nse_stocks': info.get('nse_stocks', 0),
+            'bse_stocks': info.get('bse_stocks', 0),
+        })
+    except Exception as e:
+        logger.exception("Refresh stocks universe failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
 @app.route('/api/stocks/universe', methods=['GET'])
 def get_stocks_universe():
     """Get paginated NSE/BSE stock list. Query: exchange (NSE|BSE), limit, offset, search."""
@@ -2593,6 +2704,96 @@ def get_top_stocks():
         {'ticker': '^NSEBANK', 'name': 'Bank Nifty', 'return': 0.00, 'sharpe': 0.00},
     ]
     return jsonify(top_stocks)
+
+
+def _holding_to_ticker_and_key(h: dict) -> Tuple[Optional[str], Optional[str]]:
+    """Extract (ticker, instrument_key) from holding. instrument_key from Upstox is used for historical API."""
+    instrument_key = h.get('instrument_key') or h.get('instrumentKey') or ''
+    inst_key_upper = (instrument_key or '').upper()
+    symbol = (h.get('tradingsymbol') or h.get('trading_symbol') or h.get('symbol') or
+              h.get('name') or h.get('company_name') or '')
+    if not symbol or symbol == 'N/A':
+        if instrument_key:
+            parts = str(instrument_key).split('|')
+            symbol = parts[-1] if len(parts) > 1 else parts[0]
+        else:
+            return None, None
+    symbol = str(symbol).strip()
+    if '|' in symbol:
+        symbol = symbol.split('|')[-1]
+    symbol = symbol.replace('NSE_EQ|', '').replace('BSE_EQ|', '').replace('NSE_', '').replace('BSE_', '')
+    if not symbol:
+        return None, None
+    if symbol.startswith('^'):
+        return symbol, instrument_key if instrument_key else None
+    if '.' in symbol:
+        ticker = symbol
+    elif 'BSE' in inst_key_upper or 'BSE_EQ' in inst_key_upper:
+        ticker = f"{symbol}.BO"
+    else:
+        ticker = f"{symbol}.NS"
+    return ticker, instrument_key if instrument_key else None
+
+
+def _holding_to_ticker(h: dict) -> Optional[str]:
+    """Extract normalized ticker from holding (e.g. RELIANCE.NS, BSE.BO)."""
+    t, _ = _holding_to_ticker_and_key(h)
+    return t
+
+
+@app.route('/api/signals/tickers')
+def get_signals_tickers():
+    """
+    Get ticker list for trading signals. Query: source=demat|watchlist|both.
+    When Upstox connected and source includes demat: returns holdings tickers + instrument_keys for direct Upstox API.
+    """
+    source = request.args.get('source', 'demat').lower()
+    if source not in ('demat', 'watchlist', 'both'):
+        source = 'demat'
+    tickers = []
+    ticker_keys = {}  # ticker -> instrument_key for demat holdings (bypasses instrument master)
+    seen = set()
+    client = _get_upstox_client()
+    if source in ('demat', 'both') and client and client.access_token:
+        try:
+            holdings = client.get_holdings()
+            if holdings:
+                for h in holdings:
+                    t, inst_key = _holding_to_ticker_and_key(h)
+                    if t and t not in seen:
+                        tickers.append(t)
+                        seen.add(t)
+                        if inst_key:
+                            ticker_keys[t] = inst_key
+        except Exception as e:
+            logger.warning(f"[Signals/Tickers] Holdings fetch failed: {e}")
+    if source in ('watchlist', 'both'):
+        wl = watchlist_manager.get_watchlist()
+        for t in wl:
+            t = str(t).strip()
+            if t and t not in seen:
+                tickers.append(t)
+                seen.add(t)
+    if not tickers and source == 'demat':
+        wl = watchlist_manager.get_watchlist()
+        tickers = wl[:20] if wl else []
+    # Fallback: ensure we always return some tickers for signals to display
+    _popular = ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS', 'SBIN.NS', 'BHARTIARTL.NS', 'ITC.NS', 'LT.NS', 'HINDUNILVR.NS']
+    if not tickers:
+        tickers = _popular
+    return jsonify({'tickers': tickers, 'ticker_keys': ticker_keys, 'source': source})
+
+
+@app.route('/api/signals/cache-status')
+def get_signals_cache_status():
+    """Get pre-computed signal cache status (count, last_updated)."""
+    try:
+        from src.web.signal_cache import get_cache_meta
+        meta = get_cache_meta()
+        return jsonify(meta)
+    except Exception as e:
+        return jsonify({'count': 0, 'error': str(e)})
+
 
 @app.route('/api/holdings')
 def get_holdings():

@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from src.research.data import download_yahoo_ohlcv
+from src.research.data import download_yahoo_ohlcv, OHLCV
 from src.research.features import add_label_forward_return_up, clean_ml_frame
 from src.research.ml import train_baseline_classifier, load_model
 from src.web.ai_models.advanced_features import make_advanced_features, get_advanced_feature_columns
@@ -99,7 +99,8 @@ class EliteSignalGenerator:
         self,
         ticker: str,
         use_ensemble: bool = True,
-        use_multi_timeframe: bool = True
+        use_multi_timeframe: bool = True,
+        instrument_key_override: Optional[str] = None
     ) -> Dict:
         """
         Generate ELITE trading signal
@@ -150,27 +151,45 @@ class EliteSignalGenerator:
             Path("cache").mkdir(parents=True, exist_ok=True)
             cache_path = Path('cache') / f"{ticker.replace('^', '').replace(':', '_').replace('/', '_')}.csv"
             
-            # Fix Bug 1: Check if cache is stale and force refresh if needed
-            # Cache is stale if it's older than 1 day or if date range doesn't match current range
-            force_refresh = False
-            if cache_path.exists():
-                cache_age = (dt.now() - dt.fromtimestamp(cache_path.stat().st_mtime)).total_seconds()
-                # Refresh if cache is older than 1 day (86400 seconds)
-                if cache_age > 86400:
-                    force_refresh = True
-                    logger.info(f"[ELITE Signal] Cache for {ticker} is {cache_age/3600:.1f} hours old, forcing refresh")
+            # Try DataSourceManager first (Upstox when connected - no SSL/blocking)
+            ohlcv = None
+            data_hint = None
+            try:
+                from src.web.data_source_manager import get_data_source_manager
+                hist_data, _, data_hint = get_data_source_manager().get_historical_data(
+                    ticker, start_date, end_date, instrument_key_override=instrument_key_override
+                )
+                if hist_data and len(hist_data) >= 50:
+                    df = pd.DataFrame(hist_data)
+                    df['date'] = pd.to_datetime(df['date'])
+                    df = df.set_index('date').sort_index()
+                    df.columns = [c.lower() for c in df.columns]
+                    if all(c in df.columns for c in ['open', 'high', 'low', 'close', 'volume']):
+                        ohlcv = OHLCV(df=df)
+                        logger.info(f"[ELITE Signal] Using Upstox historical data for {ticker}")
+            except Exception as e:
+                logger.debug(f"[ELITE Signal] DataSourceManager failed for {ticker}: {e}")
             
-            ohlcv = download_yahoo_ohlcv(
-                ticker=ticker,
-                start=start_date,
-                end=end_date,
-                interval='1d',
-                cache_path=cache_path,
-                refresh=force_refresh
-            )
+            # Fallback to Yahoo Finance
+            if ohlcv is None:
+                force_refresh = False
+                if cache_path.exists():
+                    cache_age = (dt.now() - dt.fromtimestamp(cache_path.stat().st_mtime)).total_seconds()
+                    if cache_age > 86400:
+                        force_refresh = True
+                        logger.info(f"[ELITE Signal] Cache for {ticker} is {cache_age/3600:.1f} hours old, forcing refresh")
+                ohlcv = download_yahoo_ohlcv(
+                    ticker=ticker,
+                    start=start_date,
+                    end=end_date,
+                    interval='1d',
+                    cache_path=cache_path,
+                    refresh=force_refresh
+                )
             
             if ohlcv is None or len(ohlcv.df) == 0:
-                return {'error': 'No data available for ticker', 'ticker': ticker}
+                hint = data_hint or 'Historical data unavailable. Connect Upstox or verify ticker symbol.'
+                return {'error': 'No data available for ticker', 'ticker': ticker, 'hint': hint}
             
             # Generate features
             if self.use_advanced_features:
@@ -187,7 +206,7 @@ class EliteSignalGenerator:
             ml_df = clean_ml_frame(labeled_df, feature_cols=feature_cols, label_col="label_up")
             
             if len(ml_df) < 100:
-                return {'error': 'Insufficient data for ELITE analysis', 'ticker': ticker}
+                return {'error': 'Insufficient data for ELITE analysis', 'ticker': ticker, 'hint': 'Need at least 100 days of data.'}
             
             # Prepare data
             train_df = ml_df.iloc[:-1].copy()

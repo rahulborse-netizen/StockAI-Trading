@@ -42,19 +42,30 @@ document.addEventListener('DOMContentLoaded', function() {
         loadOrders();
     }, 500);
     
-    // Auto-refresh - more frequent for indices
+    // Auto-refresh - indices every 15s when tab visible for live feel
     setInterval(() => {
-        loadMarketIndices();
-    }, 10000); // Refresh indices every 10 seconds
+        if (document.visibilityState === 'visible') loadMarketIndices();
+    }, 15000); // Refresh indices every 15 seconds
     
     setInterval(() => {
-        loadHoldings();
-        updatePrices();
-    }, 30000); // Refresh holdings and prices every 30 seconds
+        if (document.visibilityState === 'visible') {
+            loadHoldings();
+            updatePrices();
+        }
+    }, 15000); // Refresh holdings and prices every 15 seconds
     
-    // Stock search
+    // Stock search - live search from universe when 2+ chars, otherwise filter/restore top stocks
+    let stockSearchDebounce;
     document.getElementById('stock-search')?.addEventListener('input', function(e) {
-        filterStockList(e.target.value);
+        const q = (e.target.value || '').trim();
+        clearTimeout(stockSearchDebounce);
+        if (q.length >= 2) {
+            stockSearchDebounce = setTimeout(() => loadStockSearch(q), 300);
+        } else if (q.length === 0) {
+            loadTopStocks();
+        } else {
+            filterStockList(q);
+        }
     });
     
     // Order type change
@@ -151,6 +162,23 @@ async function loadMarketIndices() {
             
             sectoralContainer.innerHTML = sectoralHtml || '<div class="text-muted" style="font-size: 0.75rem; padding: 0.5rem;">Sectoral indices loading...</div>';
         }
+        // Show "Connect Upstox" banner when indices empty and Upstox not connected
+        const majorIds = ['nifty', 'sensex', 'banknifty', 'vix'];
+        const allEmpty = majorIds.every(id => !indices[id] || !indices[id].value);
+        if (allEmpty && !window.upstoxConnected) {
+            let banner = document.getElementById('indices-connect-banner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'indices-connect-banner';
+                banner.className = 'indices-connect-banner';
+                banner.innerHTML = '<i class="fas fa-info-circle"></i> Connect Upstox for live index data';
+                const container = document.getElementById('indices-container-main');
+                if (container) container.prepend(banner);
+            }
+            banner.classList.remove('d-none');
+        } else {
+            document.getElementById('indices-connect-banner')?.classList.add('d-none');
+        }
     } catch (error) {
         console.error('Error loading market indices:', error);
         // Show error on indices
@@ -163,6 +191,18 @@ async function loadMarketIndices() {
                 if (changeEl) changeEl.textContent = '--';
             }
         });
+        if (!window.upstoxConnected) {
+            let banner = document.getElementById('indices-connect-banner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'indices-connect-banner';
+                banner.className = 'indices-connect-banner';
+                banner.innerHTML = '<i class="fas fa-info-circle"></i> Connect Upstox for live index data';
+                const container = document.getElementById('indices-container-main');
+                if (container) container.prepend(banner);
+            }
+            banner.classList.remove('d-none');
+        }
     }
 }
 
@@ -183,12 +223,14 @@ async function checkUpstoxConnection() {
         const response = await fetch('/api/upstox/status');
         const status = await response.json();
         
+        window.upstoxConnected = !!status.connected;
         if (status.connected) {
             const statusEl = document.getElementById('connection-status');
             if (statusEl) {
                 statusEl.innerHTML = '<i class="fas fa-circle"></i><span class="mobile-hide">Connected</span>';
                 statusEl.classList.add('connected');
             }
+            document.getElementById('indices-connect-banner')?.classList.add('d-none');
             console.log('[DEBUG] Upstox is connected, loading data...');
         } else {
             const statusEl = document.getElementById('connection-status');
@@ -481,7 +523,9 @@ async function renderHoldingsTable() {
                     const badgeClass = signal.color === 'success' ? 'bg-success' : 
                                      signal.color === 'danger' ? 'bg-danger' : 
                                      signal.color === 'warning' ? 'bg-warning' : 'bg-secondary';
-                    signalEl.innerHTML = `<span class="badge ${badgeClass}">${signal.signal}</span>`;
+                    const titleAttr = signal.hint ? ` title="${signal.hint.replace(/"/g, '&quot;')}"` : '';
+                    const probText = signal.probability != null ? ` ${Math.round(signal.probability * 100)}%` : '';
+                    signalEl.innerHTML = `<span class="badge ${badgeClass}"${titleAttr}>${signal.signal}${probText}</span>`;
                 }
             } catch (error) {
                 console.error(`Error loading signal for ${holding.symbol}:`, error);
@@ -559,11 +603,49 @@ async function loadTopStocks() {
 function filterStockList(query) {
     const items = document.querySelectorAll('.stock-list-item');
     const lowerQuery = query.toLowerCase();
-    
     items.forEach(item => {
         const text = item.textContent.toLowerCase();
         item.style.display = text.includes(lowerQuery) ? 'flex' : 'none';
     });
+}
+
+// Live stock search from universe (when user types 2+ chars)
+async function loadStockSearch(query) {
+    const container = document.getElementById('stock-list-container');
+    if (!container) return;
+    try {
+        container.innerHTML = '<div class="empty-state"><p>Searching...</p></div>';
+        const res = await fetch('/api/stocks/universe?search=' + encodeURIComponent(query) + '&limit=25');
+        const data = await res.json();
+        const stocks = data.stocks || [];
+        if (stocks.length === 0) {
+            container.innerHTML = '<div class="empty-state"><p>No stocks found for "' + query + '"</p></div>';
+            return;
+        }
+        let prices = {};
+        try {
+            const tickers = stocks.map(s => s.ticker).join(',');
+            const pricesRes = await fetch('/api/prices?tickers=' + encodeURIComponent(tickers));
+            if (pricesRes.ok) prices = await pricesRes.json();
+        } catch (_) {}
+        container.innerHTML = stocks.map(stock => {
+            const price = prices[stock.ticker];
+            const change = price && !price.error ? (price.change_pct || 0) : 0;
+            const changeClass = change >= 0 ? 'positive' : 'negative';
+            return `<div class="stock-list-item" onclick="selectStock('${stock.ticker}')">
+                <div class="stock-list-item-info">
+                    <div class="stock-list-item-symbol">${stock.name || stock.ticker}</div>
+                    <div class="stock-list-item-price">${stock.ticker}</div>
+                </div>
+                <div class="stock-list-item-change ${changeClass}">${change >= 0 ? '+' : ''}${Number(change).toFixed(2)}%</div>
+            </div>`;
+        }).join('');
+        const countEl = document.getElementById('top-stocks-count');
+        if (countEl) countEl.textContent = stocks.length;
+    } catch (err) {
+        console.error('Stock search failed:', err);
+        container.innerHTML = '<div class="empty-state"><p>Search failed. Try again.</p></div>';
+    }
 }
 
 function selectStock(ticker) {
@@ -884,12 +966,29 @@ const POPULAR_STOCKS = [
     'ITC.NS', 'LT.NS', 'HCLTECH.NS', 'AXISBANK.NS', 'MARUTI.NS'
 ];
 
+let signalsSource = 'demat';  // demat | watchlist | both
+
+function setSignalsSource(source) {
+    signalsSource = source;
+    document.querySelectorAll('.signals-source-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.source === source) btn.classList.add('active');
+    });
+    loadSignals();
+}
+window.setSignalsSource = setSignalsSource;
+
+function loadSignalsWithPopularStocks() {
+    loadSignals(POPULAR_STOCKS);
+}
+window.loadSignalsWithPopularStocks = loadSignalsWithPopularStocks;
+
 function setSignalsLastUpdated() {
     const el = document.getElementById('signals-last-updated');
     if (el) el.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
 }
 
-async function loadSignals() {
+async function loadSignals(forceStocks) {
     const container = document.getElementById('signals-container');
     if (!container) return;
     
@@ -897,15 +996,37 @@ async function loadSignals() {
     container.innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-3">Loading trading signals...</p></div>';
     
     try {
-        // First, try to get watchlist stocks
-        const watchlistResponse = await fetch('/api/watchlist');
-        const watchlist = await watchlistResponse.json();
-        
-        // Use watchlist if available, otherwise use popular stocks
-        const stocksToLoad = watchlist.length > 0 ? watchlist : POPULAR_STOCKS;
-        
-        // Limit to first 10 stocks for performance
-        const stocks = stocksToLoad.slice(0, 10);
+        let stocks = [];
+        let tickerKeys = {};
+        if (Array.isArray(forceStocks) && forceStocks.length > 0) {
+            stocks = forceStocks.slice(0, 15);
+        } else {
+            // Fetch tickers from /api/signals/tickers (demat holdings, watchlist, or both)
+            let stocksToLoad = [];
+            try {
+                const tickersRes = await fetch('/api/signals/tickers?source=' + encodeURIComponent(signalsSource));
+                const tickersData = await tickersRes.json();
+                stocksToLoad = tickersData.tickers || [];
+                tickerKeys = tickersData.ticker_keys || {};
+            } catch (tickersErr) {
+                console.warn('[Signals] Tickers fetch failed, using popular stocks:', tickersErr);
+            }
+            
+            // Fallback to watchlist or popular stocks if empty
+            stocks = stocksToLoad.length > 0 ? stocksToLoad : [];
+            if (stocks.length === 0) {
+                try {
+                    const wlRes = await fetch('/api/watchlist');
+                    const wl = await wlRes.json();
+                    stocks = Array.isArray(wl) && wl.length > 0 ? wl : POPULAR_STOCKS;
+                } catch (wlErr) {
+                    stocks = POPULAR_STOCKS;
+                }
+            }
+            
+            // Limit to first 15 stocks for performance
+            stocks = stocks.slice(0, 15);
+        }
         
         if (stocks.length === 0) {
             container.innerHTML = '<div class="empty-state"><i class="fas fa-mouse-pointer"></i><p>No stocks available. Add stocks to watchlist or select a stock to view signals.</p></div>';
@@ -916,12 +1037,15 @@ async function loadSignals() {
         const signalPromises = stocks.map(async (ticker) => {
             const maxRetries = 2;
             let retryCount = 0;
+            const instKey = tickerKeys[ticker];  // Use instrument_key from holdings when available
             
             while (retryCount <= maxRetries) {
                 try {
                     // URL encode ticker to handle special characters like ^
                     const encodedTicker = encodeURIComponent(ticker);
-                    const response = await fetch(`/api/signals/${encodedTicker}`, {
+                    let url = `/api/signals/${encodedTicker}`;
+                    if (instKey) url += '?instrument_key=' + encodeURIComponent(instKey);
+                    const response = await fetch(url, {
                         method: 'GET',
                         headers: {
                             'Content-Type': 'application/json'
@@ -947,9 +1071,12 @@ async function loadSignals() {
                     }
                     
                     const signal = await response.json();
+                    if (signal.error && (signal.signal === 'N/A' || !signal.signal)) {
+                        // Graceful degradation: show as Data unavailable instead of skipping
+                        return { ticker, signal: { ...signal, signal: 'N/A', _dataUnavailable: true } };
+                    }
                     if (signal.error) {
                         console.warn(`Signal error for ${ticker}: ${signal.error}`);
-                        // Don't retry on client errors (400, 404)
                         return null;
                     }
                     return { ticker, signal };
@@ -982,9 +1109,9 @@ async function loadSignals() {
             // Show more helpful error message with troubleshooting tips
             let errorDetails = '';
             if (failedTickers.length > 0) {
-                errorDetails = `<p style="font-size: 0.75rem; color: #ef4444; margin-top: 0.5rem;">
-                    <strong>Invalid tickers detected:</strong> ${failedTickers.join(', ')}<br>
-                    These tickers may not exist or have incorrect formats. Consider removing them from your watchlist.
+                errorDetails = `<p style="font-size: 0.75rem; color: #f59e0b; margin-top: 0.5rem;">
+                    <strong>Signal generation failed for:</strong> ${failedTickers.join(', ')}<br>
+                    Data may be unavailable (try connecting Upstox) or tickers may need verification.
                 </p>`;
             }
             
@@ -1005,6 +1132,9 @@ async function loadSignals() {
                         <button class="btn-modern btn-primary" onclick="loadSignals()" style="margin-right: 0.5rem;">
                             <i class="fas fa-sync-alt"></i> Retry Now
                         </button>
+                        <button class="btn-modern btn-secondary" onclick="loadSignalsWithPopularStocks()" style="margin-right: 0.5rem;">
+                            <i class="fas fa-star"></i> Try Popular Stocks
+                        </button>
                         <button class="btn-modern btn-secondary" onclick="loadAllSignals()">
                             <i class="fas fa-redo"></i> Refresh All
                         </button>
@@ -1024,9 +1154,8 @@ async function loadSignals() {
             warningMessage = `
                 <div class="alert alert-warning" style="margin-bottom: 1rem; padding: 0.75rem; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; color: #92400e;">
                     <i class="fas fa-exclamation-triangle"></i> 
-                    <strong>Note:</strong> ${validSignals.length} signal(s) loaded successfully. 
-                    ${failedTickers.length} ticker(s) failed: ${failedTickers.join(', ')}. 
-                    These may be invalid tickers - consider removing them from your watchlist.
+                    <strong>Note:</strong> ${validSignals.length} signal(s) shown. 
+                    ${failedTickers.length} ticker(s) failed: ${failedTickers.join(', ')}.
                 </div>
             `;
         }
@@ -1035,6 +1164,17 @@ async function loadSignals() {
         container.innerHTML = warningMessage + `
             <div class="signals-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-top: 1rem;">
                 ${validSignals.map(({ ticker, signal }) => {
+                    if (signal._dataUnavailable) {
+                        const hint = signal.hint || 'Connect Upstox or verify ticker symbol.';
+                        return `
+                        <div class="signal-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; opacity: 0.9;">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h6 style="margin: 0; font-weight: 700; font-size: 1.1rem;">${ticker.replace('.NS', '')}</h6>
+                                <span class="badge bg-secondary" style="font-size: 0.75rem;">Data unavailable</span>
+                            </div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted);">${hint}</div>
+                        </div>`;
+                    }
                     const signalClass = signal.signal === 'BUY' ? 'success' : 
                                      signal.signal === 'SELL' ? 'danger' : 'warning';
                     const signalIcon = signal.signal === 'BUY' ? 'fa-arrow-up' : 
