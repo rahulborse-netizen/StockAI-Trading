@@ -59,6 +59,61 @@
     pointer-events: none; /* Prevent child elements from blocking clicks */
 }
 
+/* More dropdown in nav */
+.nav-more-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.nav-tab-more * {
+    pointer-events: none;
+}
+
+.nav-more-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 200px;
+    margin-top: 2px;
+    padding: 0.25rem 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    z-index: 1010;
+    list-style: none;
+}
+
+.nav-more-menu.open {
+    display: block;
+}
+
+.nav-more-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.625rem 1rem;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.2s;
+}
+
+.nav-more-item:hover {
+    background: var(--bg-secondary);
+}
+
+.nav-more-item i {
+    width: 1.25rem;
+    opacity: 0.8;
+}
+
 /* Position Filters */
 .positions-header {
     display: flex;
@@ -226,6 +281,11 @@
     max-width: 1920px;
     margin: 0 auto;
     flex-wrap: wrap;
+}
+
+.indices-container.indices-live {
+    border-left: 3px solid var(--success-color, #10b981);
+    padding-left: 0.5rem;
 }
 
 .indices-connect-banner {
@@ -403,14 +463,19 @@
     color: var(--danger-color);
 }
 
-/* Tabs Navigation */
+/* Tabs Navigation (scrollable with visible scroll hint on narrow screens) */
 .tabs-nav {
     display: flex;
     gap: 0.5rem;
     border-bottom: 2px solid var(--border-color);
     margin-bottom: 1.5rem;
     overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
 }
+
 
 .tab-btn {
     padding: 0.75rem 1.5rem;

@@ -77,10 +77,23 @@
                 <button class="nav-tab active" onclick="switchTab('holdings')" data-tab="holdings">
                     <span>Holdings</span>
                 </button>
-                <button class="nav-tab" onclick="switchTab('signals')" data-tab="signals">
-                    <span>More</span>
-                    <i class="fas fa-chevron-down"></i>
-                </button>
+                <div class="nav-more-dropdown" id="nav-more-dropdown">
+                    <button class="nav-tab nav-tab-more" type="button" onclick="toggleMoreDropdown(event)" id="nav-more-btn" aria-haspopup="true" aria-expanded="false">
+                        <span>More</span>
+                        <i class="fas fa-chevron-down" id="nav-more-chevron"></i>
+                    </button>
+                    <div class="nav-more-menu" id="nav-more-menu" role="menu" aria-label="More sections">
+                        <button type="button" class="nav-more-item" role="menuitem" onclick="closeMoreDropdown(); switchTab('signals');">
+                            <i class="fas fa-crosshairs"></i> Trading Signals
+                        </button>
+                        <button type="button" class="nav-more-item" role="menuitem" onclick="closeMoreDropdown(); switchTab('trade-plans');">
+                            <i class="fas fa-clipboard-list"></i> Trade Plans
+                        </button>
+                        <button type="button" class="nav-more-item" role="menuitem" onclick="closeMoreDropdown(); switchTab('analytics');">
+                            <i class="fas fa-chart-bar"></i> Analytics
+                        </button>
+                    </div>
+                </div>
             </div>
             
             <!-- Phase 2.5: Trading Mode Toggle -->
@@ -145,6 +158,37 @@
             <div id="sectoral-indices-container" style="display: none; margin-top: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
                 <!-- Sectoral indices will be loaded here -->
             </div>
+        </div>
+    </div>
+
+    <!-- Onboarding checklist (first-time user flow) -->
+    <div class="onboarding-banner card-modern" id="onboarding-banner" style="display: none; margin: 1rem auto; max-width: 1400px; padding: 1rem 1.5rem; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg-secondary);">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+            <div>
+                <h4 style="margin: 0 0 0.5rem 0; font-size: 1rem;"><i class="fas fa-route"></i> Get started</h4>
+                <div class="onboarding-steps" style="display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.875rem;">
+                    <span id="onboarding-step1" class="onboarding-step">
+                        <i class="fas fa-circle-notch fa-spin" id="onboarding-icon1" style="display: none;"></i>
+                        <i class="fas fa-check-circle text-success" id="onboarding-done1" style="display: none;"></i>
+                        <i class="fas fa-circle" id="onboarding-pending1"></i>
+                        <span>1. Connect Upstox</span>
+                        <button type="button" class="btn-modern btn-sm btn-primary" style="margin-left: 0.5rem;" onclick="showUpstoxModal();">Connect</button>
+                    </span>
+                    <span id="onboarding-step2" class="onboarding-step">
+                        <i class="fas fa-check-circle text-success" id="onboarding-done2" style="display: none;"></i>
+                        <i class="fas fa-circle" id="onboarding-pending2"></i>
+                        <span>2. Set risk limits (optional)</span>
+                        <a href="/auto-trading" class="btn-modern btn-sm btn-secondary" style="margin-left: 0.5rem;">Settings</a>
+                    </span>
+                    <span id="onboarding-step3" class="onboarding-step">
+                        <i class="fas fa-check-circle text-success" id="onboarding-done3" style="display: none;"></i>
+                        <i class="fas fa-circle" id="onboarding-pending3"></i>
+                        <span>3. View your first signal</span>
+                        <button type="button" class="btn-modern btn-sm btn-secondary" style="margin-left: 0.5rem;" onclick="closeMoreDropdown(); switchTab('signals');">Signals</button>
+                    </span>
+                </div>
+            </div>
+            <button type="button" class="btn-close-modern" onclick="dismissOnboarding()" title="Dismiss">×</button>
         </div>
     </div>
 
@@ -225,6 +269,11 @@
                     <div class="stock-list" id="stock-list-container">
                         <!-- Stock list will be loaded here -->
                     </div>
+                    <div class="sidebar-footer mt-2">
+                        <button type="button" class="btn-modern btn-secondary btn-sm w-100" onclick="openStocksUniverseModal()">
+                            <i class="fas fa-list"></i> View all stocks
+                        </button>
+                    </div>
                 </div>
             </div>
             
@@ -233,8 +282,8 @@
 
             <!-- Main Content -->
             <div class="main-content">
-                <!-- Tabs Navigation -->
-                <div class="tabs-nav">
+                <!-- Tabs Navigation (scrollable on narrow screens) -->
+                <div class="tabs-nav" id="main-tabs-nav" role="tablist">
                     <button class="tab-btn active" onclick="switchTab('holdings')" data-tab="holdings">
                         <i class="fas fa-wallet"></i> Holdings
                     </button>
@@ -430,12 +479,14 @@
                     <div class="signals-header">
                         <h3><i class="fas fa-crosshairs"></i> Trading Signals & Entry/Exit Levels</h3>
                         <div class="signals-actions">
+                            <span id="signals-precompute-status" class="signals-precompute-badge text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;" title="Pre-computed signals cache">Signals: —/— cached</span>
+                            <span id="signals-accuracy-summary" class="text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;" title="Backtest metrics (NIFTY 50)">Win rate: — | Sharpe: — | Max DD: —</span>
                             <span id="signals-last-updated" class="text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;">Last updated: —</span>
-                            <button class="btn-modern btn-primary" onclick="loadAdaptiveEliteSignals()" style="margin-right: 0.5rem;">
-                                <i class="fas fa-brain"></i> Adaptive Elite Signals
+                            <button class="btn-modern btn-primary" onclick="loadAllSignals()" style="margin-right: 0.5rem;" title="Load signals for your Demat portfolio (Upstox)">
+                                <i class="fas fa-briefcase"></i> Portfolio Signals
                             </button>
-                            <button class="btn-modern btn-secondary" onclick="loadAllSignals()" style="margin-right: 0.5rem;">
-                                <i class="fas fa-sync-alt"></i> All Signals
+                            <button class="btn-modern btn-secondary" onclick="loadAdaptiveEliteSignals()" style="margin-right: 0.5rem;">
+                                <i class="fas fa-brain"></i> Adaptive Elite
                             </button>
                             <button class="btn-modern btn-secondary" onclick="showIndexSignals()">
                                 <i class="fas fa-chart-bar"></i> Index Signals
@@ -468,11 +519,12 @@
                         <button type="button" class="btn-modern btn-sm btn-secondary signals-source-btn" data-source="both" onclick="setSignalsSource('both')">Both</button>
                     </div>
                     
-                    <!-- Stock Signals Section -->
+                    <!-- Stock Signals Section: Portfolio stocks + ELITE algorithm predictions -->
                     <div class="signals-container" id="signals-container">
                         <div class="empty-state">
-                            <i class="fas fa-mouse-pointer"></i>
-                            <p>Select a stock from holdings or watchlist to view trading signals and charts</p>
+                            <i class="fas fa-chart-line"></i>
+                            <p><strong>Portfolio Signals</strong></p>
+                            <p class="text-muted small">Connect Upstox, then click <strong>Portfolio Signals</strong> to see BUY/SELL/HOLD for your Demat holdings based on ELITE algorithm.</p>
                         </div>
                     </div>
                 </div>
@@ -557,6 +609,34 @@
                                 <div class="metric-label">Win Rate</div>
                                 <div class="metric-value" id="metric-win-rate">0%</div>
                             </div>
+                        </div>
+                        
+                        <!-- Strategy Accuracy (backtest report) -->
+                        <div class="chart-container" style="grid-column: 1 / -1;">
+                            <h5><i class="fas fa-bullseye"></i> Strategy Accuracy (ELITE backtest)</h5>
+                            <div id="accuracy-dashboard-content" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; padding: 1rem 0;">
+                                <div class="metric-card">
+                                    <div class="metric-label">Win Rate</div>
+                                    <div class="metric-value" id="accuracy-win-rate">—</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Sharpe Ratio</div>
+                                    <div class="metric-value" id="accuracy-sharpe">—</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Max Drawdown</div>
+                                    <div class="metric-value" id="accuracy-max-dd">—</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Total Return</div>
+                                    <div class="metric-value" id="accuracy-total-return">—</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Period</div>
+                                    <div class="metric-value" id="accuracy-period" style="font-size: 0.85rem;">—</div>
+                                </div>
+                            </div>
+                            <p class="text-muted small mb-0" id="accuracy-report-note">NIFTY 50, 5Y backtest. <button type="button" class="btn-modern btn-sm btn-secondary" onclick="loadAccuracyDashboard(true)">Refresh report</button></p>
                         </div>
                         
                         <!-- Daily P&L Chart -->
@@ -858,6 +938,28 @@
                     <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" class="btn-modern btn-success" onclick="placeOrder()">
                         <i class="fas fa-check"></i> Place Order
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 1-Click Trade Confirmation Modal -->
+    <div class="modal fade" id="oneClickConfirmModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern py-2">
+                    <h6 class="mb-0" id="one-click-title">1-Click Trade</h6>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern py-3">
+                    <p class="mb-2" id="one-click-summary"></p>
+                    <p class="text-muted small mb-0" id="one-click-warning"></p>
+                </div>
+                <div class="modal-footer-modern py-2">
+                    <button type="button" class="btn-modern btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-modern btn-success btn-sm" id="one-click-confirm-btn">
+                        <i class="fas fa-check"></i> Confirm
                     </button>
                 </div>
             </div>

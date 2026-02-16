@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pricing | AI Trading</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+</head>
+<body class="dashboard-body">
+    <nav class="navbar-modern">
+        <div class="nav-container">
+            <a href="/" class="nav-brand">
+                <div class="brand-icon"><i class="fas fa-chart-line"></i></div>
+                <div class="brand-text"><h1>AI Trading</h1><span>Smart Trading Platform</span></div>
+            </a>
+            <div class="nav-actions">
+                <a href="/" class="btn-modern btn-secondary">Dashboard</a>
+            </div>
+        </div>
+    </nav>
+    <main style="max-width: 900px; margin: 3rem auto; padding: 0 1.5rem;">
+        <h1 class="mb-4" style="font-weight: 700;">Pricing</h1>
+        <p class="text-muted mb-4">Choose the plan that fits your trading style. Payment integration (Stripe/Razorpay) can be enabled for Pro and Premium.</p>
+        <div class="row g-4">
+            <div class="col-md-4">
+                <div class="card card-modern" style="border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+                    <h5>Free</h5>
+                    <div class="mb-3"><span style="font-size: 2rem; font-weight: 700;">₹0</span><span class="text-muted">/month</span></div>
+                    <ul class="list-unstyled small">
+                        <li><i class="fas fa-check text-success me-2"></i>5 signals per day</li>
+                        <li><i class="fas fa-check text-success me-2"></i>Accuracy dashboard</li>
+                        <li><i class="fas fa-times text-muted me-2"></i>Unlimited signals</li>
+                        <li><i class="fas fa-times text-muted me-2"></i>Auto-trade</li>
+                        <li><i class="fas fa-times text-muted me-2"></i>Export CSV/PDF</li>
+                    </ul>
+                    <a href="/" class="btn-modern btn-secondary w-100">Get started</a>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card card-modern" style="border: 2px solid var(--primary-color); border-radius: 12px; padding: 1.5rem;">
+                    <span class="badge bg-primary mb-2">Popular</span>
+                    <h5>Pro</h5>
+                    <div class="mb-3"><span style="font-size: 2rem; font-weight: 700;">₹999</span><span class="text-muted">/month</span></div>
+                    <ul class="list-unstyled small">
+                        <li><i class="fas fa-check text-success me-2"></i>Unlimited signals</li>
+                        <li><i class="fas fa-check text-success me-2"></i>Accuracy dashboard</li>
+                        <li><i class="fas fa-check text-success me-2"></i>Export CSV/PDF</li>
+                        <li><i class="fas fa-times text-muted me-2"></i>Auto-trade</li>
+                    </ul>
+                    <a href="/" class="btn-modern btn-primary w-100">Coming soon</a>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card card-modern" style="border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+                    <h5>Premium</h5>
+                    <div class="mb-3"><span style="font-size: 2rem; font-weight: 700;">₹2,499</span><span class="text-muted">/month</span></div>
+                    <ul class="list-unstyled small">
+                        <li><i class="fas fa-check text-success me-2"></i>Everything in Pro</li>
+                        <li><i class="fas fa-check text-success me-2"></i>Auto-trade (ELITE)</li>
+                        <li><i class="fas fa-check text-success me-2"></i>Priority support</li>
+                    </ul>
+                    <a href="/" class="btn-modern btn-secondary w-100">Coming soon</a>
+                </div>
+            </div>
+        </div>
+        <p class="text-muted small mt-4">Payment integration (Stripe/Razorpay) to be added. Feature gating is implemented; limits apply to Free tier.</p>
+    </main>
+</body>
+</html>

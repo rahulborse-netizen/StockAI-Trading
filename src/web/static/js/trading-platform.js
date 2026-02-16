@@ -243,7 +243,57 @@ async function checkUpstoxConnection() {
     } catch (error) {
         console.error('Error checking connection status:', error);
     }
+    renderOnboarding();
 }
+
+function getOnboardingState() {
+    try {
+        const raw = localStorage.getItem('onboarding');
+        return raw ? JSON.parse(raw) : { dismissed: false, step1: false, step2: false, step3: false };
+    } catch (_) { return { dismissed: false, step1: false, step2: false, step3: false }; }
+}
+
+function setOnboardingStep(step, done) {
+    const s = getOnboardingState();
+    if (step === 1) s.step1 = !!done;
+    if (step === 2) s.step2 = !!done;
+    if (step === 3) s.step3 = !!done;
+    localStorage.setItem('onboarding', JSON.stringify(s));
+    renderOnboarding();
+}
+
+function dismissOnboarding() {
+    const s = getOnboardingState();
+    s.dismissed = true;
+    localStorage.setItem('onboarding', JSON.stringify(s));
+    document.getElementById('onboarding-banner')?.style.setProperty('display', 'none');
+}
+
+function renderOnboarding() {
+    const banner = document.getElementById('onboarding-banner');
+    if (!banner) return;
+    const s = getOnboardingState();
+    if (s.dismissed) { banner.style.display = 'none'; return; }
+    const step1Done = s.step1 || !!window.upstoxConnected;
+    if (window.upstoxConnected && !s.step1) setOnboardingStep(1, true);
+    const step2Done = s.step2;
+    const step3Done = s.step3;
+    const showBanner = !step1Done || !step3Done;
+    if (showBanner) {
+        banner.style.display = 'block';
+        ['1','2','3'].forEach(n => {
+            const done = n === '1' ? step1Done : n === '2' ? step2Done : step3Done;
+            const doneEl = document.getElementById('onboarding-done' + n);
+            const pendEl = document.getElementById('onboarding-pending' + n);
+            if (doneEl) doneEl.style.display = done ? 'inline-block' : 'none';
+            if (pendEl) pendEl.style.display = done ? 'none' : 'inline-block';
+        });
+    } else {
+        banner.style.display = 'none';
+    }
+}
+
+window.dismissOnboarding = dismissOnboarding;
 
 function updateIndexDisplay(id, value, change, changePct) {
     const element = document.getElementById(`index-${id}`);
@@ -408,9 +458,12 @@ async function loadHoldings() {
             const overallPnlPct = h.overall_pnl_pct || (invested > 0 ? (overallPnl / invested) * 100 : 0);
             const dayPnl = h.day_pnl || 0;
             const dayPnlPct = h.day_pnl_pct || 0;
+            const ticker = h.ticker || (h.symbol && h.symbol.includes('.') ? h.symbol : `${(h.symbol || '').toUpperCase()}.NS`);
             
             holdingsData.push({
                 symbol: h.symbol || 'N/A',
+                ticker: ticker,
+                instrumentKey: h.instrument_key || null,
                 qty: qty,
                 avgPrice: avgPrice,
                 ltp: ltp,
@@ -482,9 +535,11 @@ async function renderHoldingsTable() {
         const overallPnlClass = holding.overallPnl >= 0 ? 'positive' : 'negative';
         const signalId = `signal-${index}`;
         const chartId = `chart-${index}`;
+        const ticker = holding.ticker || (holding.symbol.includes('.') ? holding.symbol : `${holding.symbol}.NS`);
+        const instKey = (holding.instrumentKey || '').replace(/"/g, '&quot;');
         
         return `
-            <tr onclick="selectStock('${holding.symbol}')" style="cursor: pointer;">
+            <tr onclick="selectStock('${holding.symbol}')" style="cursor: pointer;" data-ticker="${ticker}" data-instrument-key="${instKey}" data-holding-index="${index}" data-qty="${holding.qty}" data-avg-price="${holding.avgPrice}">
                 <td class="symbol"><strong>${holding.symbol}</strong></td>
                 <td>${holding.qty}</td>
                 <td>₹${holding.avgPrice.toFixed(2)}</td>
@@ -513,11 +568,11 @@ async function renderHoldingsTable() {
         `;
     }).join('');
     
-    // Load signals for each holding asynchronously
+    // Load signals for each holding asynchronously (pass instrument_key for Upstox when available)
     holdingsData.forEach(async (holding, index) => {
         if (holding.symbol && holding.symbol !== 'N/A') {
             try {
-                const signal = await getStockSignal(holding.symbol);
+                const signal = await getStockSignal(holding.symbol, holding.ticker || null, holding.instrumentKey || null);
                 const signalEl = document.getElementById(`signal-${index}`);
                 if (signalEl) {
                     const badgeClass = signal.color === 'success' ? 'bg-success' : 
@@ -532,6 +587,38 @@ async function renderHoldingsTable() {
             }
         }
     });
+}
+
+// Update holdings row from real-time WebSocket price (LTP, day P&L, current value)
+function updateHoldingsRowFromRealtime(row, ltp, priceData) {
+    try {
+        const qty = parseFloat(row.getAttribute('data-qty')) || 0;
+        const avgPrice = parseFloat(row.getAttribute('data-avg-price')) || 0;
+        const openPrice = priceData.open || priceData.close || ltp;
+        const invested = qty * avgPrice;
+        const currentValue = ltp * qty;
+        const dayPnl = (ltp - openPrice) * qty;
+        const dayPnlPct = openPrice > 0 ? ((ltp - openPrice) / openPrice) * 100 : 0;
+        const overallPnl = currentValue - invested;
+        const overallPnlPct = invested > 0 ? (overallPnl / invested) * 100 : 0;
+        
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 9) {
+            cells[3].textContent = '₹' + ltp.toFixed(2);
+            cells[3].className = ltp >= avgPrice ? 'positive' : 'negative';
+            cells[4].textContent = '₹' + currentValue.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            cells[5].textContent = (dayPnl >= 0 ? '+' : '') + dayPnl.toFixed(2);
+            cells[5].className = dayPnl >= 0 ? 'positive' : 'negative';
+            cells[6].textContent = (dayPnlPct >= 0 ? '+' : '') + dayPnlPct.toFixed(2) + '%';
+            cells[6].className = dayPnl >= 0 ? 'positive' : 'negative';
+            cells[7].textContent = (overallPnl >= 0 ? '+' : '') + overallPnl.toFixed(2);
+            cells[7].className = overallPnl >= 0 ? 'positive' : 'negative';
+            cells[8].textContent = (overallPnlPct >= 0 ? '+' : '') + overallPnlPct.toFixed(2) + '%';
+            cells[8].className = overallPnl >= 0 ? 'positive' : 'negative';
+        }
+    } catch (e) {
+        console.error('Error updating holdings row:', e);
+    }
 }
 
 // Load Top Stocks for Sidebar
@@ -705,6 +792,8 @@ window.switchTab = function switchTab(tabName) {
     const tabButtons = document.querySelectorAll('.tab-btn, .nav-tab');
     console.log('[TAB] Found', tabButtons.length, 'tab buttons');
     
+    const moreTabNames = ['signals', 'trade-plans', 'analytics'];
+    const isMoreTab = moreTabNames.includes(tabName);
     tabButtons.forEach(btn => {
         btn.classList.remove('active');
         const tabValue = btn.dataset.tab || btn.getAttribute('data-tab');
@@ -713,6 +802,10 @@ window.switchTab = function switchTab(tabName) {
             console.log('[TAB] Activated button:', tabValue);
         }
     });
+    const moreBtn = document.getElementById('nav-more-btn');
+    if (moreBtn) {
+        if (isMoreTab) moreBtn.classList.add('active'); else moreBtn.classList.remove('active');
+    }
     
     // Update tab content
     const tabContents = document.querySelectorAll('.tab-content');
@@ -741,6 +834,7 @@ window.switchTab = function switchTab(tabName) {
     } else if (tabName === 'orders') {
         loadOrders();
     } else if (tabName === 'signals') {
+        if (typeof setOnboardingStep === 'function') setOnboardingStep(3, true);
         // Auto-load signals when signals tab is opened
         loadSignals();
         // Auto-refresh signals every 90 seconds while on this tab
@@ -766,9 +860,47 @@ window.switchTab = function switchTab(tabName) {
             if (typeof loadReturnsComparisonChart === 'function') {
                 loadReturnsComparisonChart();
             }
+            if (typeof loadAccuracyDashboard === 'function') {
+                loadAccuracyDashboard(false);
+            }
         }, 500);
     }
+    closeMoreDropdown();
 }
+
+// More dropdown (Trading Signals, Trade Plans, Analytics)
+function toggleMoreDropdown(ev) {
+    if (ev) ev.stopPropagation();
+    const menu = document.getElementById('nav-more-menu');
+    const btn = document.getElementById('nav-more-btn');
+    const chevron = document.getElementById('nav-more-chevron');
+    if (!menu || !btn) return;
+    const isOpen = menu.classList.contains('open');
+    if (isOpen) {
+        menu.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+        if (chevron) chevron.className = 'fas fa-chevron-down';
+        document.removeEventListener('click', closeMoreDropdown);
+    } else {
+        menu.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+        if (chevron) chevron.className = 'fas fa-chevron-up';
+        setTimeout(() => document.addEventListener('click', closeMoreDropdown), 0);
+    }
+}
+
+function closeMoreDropdown() {
+    const menu = document.getElementById('nav-more-menu');
+    const btn = document.getElementById('nav-more-btn');
+    const chevron = document.getElementById('nav-more-chevron');
+    if (menu) menu.classList.remove('open');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (chevron) chevron.className = 'fas fa-chevron-down';
+    document.removeEventListener('click', closeMoreDropdown);
+}
+
+window.toggleMoreDropdown = toggleMoreDropdown;
+window.closeMoreDropdown = closeMoreDropdown;
 
 function filterHoldings(filter) {
     // Filter logic for holdings
@@ -988,12 +1120,92 @@ function setSignalsLastUpdated() {
     if (el) el.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
 }
 
+async function updateSignalsPrecomputeStatus() {
+    const el = document.getElementById('signals-precompute-status');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/signals/cache-status');
+        const data = await res.json();
+        const cached = data.cached != null ? data.cached : data.count;
+        const total = data.total != null ? data.total : 30;
+        const done = data.done === true;
+        el.textContent = 'Signals: ' + cached + '/' + total + ' cached';
+        el.title = done ? 'Pre-compute complete. Cached signals ready.' : 'Pre-computing signals in background...';
+        if (done) el.classList.add('signals-cache-ready'); else el.classList.remove('signals-cache-ready');
+    } catch (_) {
+        el.textContent = 'Signals: —/— cached';
+    }
+}
+
+var signalsBacktestReport = null;
+
+async function updateSignalsAccuracySummary() {
+    const el = document.getElementById('signals-accuracy-summary');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/backtest/report');
+        const data = await res.json();
+        signalsBacktestReport = data.status === 'success' ? data : null;
+        if (signalsBacktestReport && signalsBacktestReport.win_rate != null) {
+            const wr = signalsBacktestReport.win_rate;
+            const sharpe = signalsBacktestReport.sharpe_ratio != null ? signalsBacktestReport.sharpe_ratio : '—';
+            const dd = signalsBacktestReport.max_drawdown != null ? (signalsBacktestReport.max_drawdown + '%') : '—';
+            el.textContent = 'Win rate: ' + wr + '% | Sharpe: ' + sharpe + ' | Max DD: ' + dd;
+            el.title = 'ELITE strategy backtest (NIFTY 50, 5Y). Refresh with ?refresh=1 to regenerate.';
+        } else {
+            el.textContent = 'Win rate: — | Sharpe: — | Max DD: —';
+        }
+    } catch (_) {
+        el.textContent = 'Win rate: — | Sharpe: — | Max DD: —';
+    }
+}
+
+async function loadAccuracyDashboard(refresh) {
+    const wrEl = document.getElementById('accuracy-win-rate');
+    const sharpeEl = document.getElementById('accuracy-sharpe');
+    const ddEl = document.getElementById('accuracy-max-dd');
+    const retEl = document.getElementById('accuracy-total-return');
+    const periodEl = document.getElementById('accuracy-period');
+    if (!wrEl) return;
+    try {
+        const url = '/api/backtest/report' + (refresh ? '?refresh=1' : '');
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.status === 'success') {
+            wrEl.textContent = (data.win_rate != null) ? data.win_rate + '%' : '—';
+            sharpeEl.textContent = (data.sharpe_ratio != null) ? Number(data.sharpe_ratio).toFixed(3) : '—';
+            ddEl.textContent = (data.max_drawdown != null) ? data.max_drawdown + '%' : '—';
+            retEl.textContent = (data.total_return != null) ? data.total_return + '%' : '—';
+            if (periodEl && data.start_date && data.end_date) {
+                periodEl.textContent = (data.start_date || '').slice(0, 10) + ' → ' + (data.end_date || '').slice(0, 10);
+            }
+        } else {
+            wrEl.textContent = '—';
+            if (sharpeEl) sharpeEl.textContent = '—';
+            if (ddEl) ddEl.textContent = '—';
+            if (retEl) retEl.textContent = '—';
+            if (periodEl) periodEl.textContent = data.error || 'Error';
+        }
+    } catch (_) {
+        wrEl.textContent = '—';
+        if (sharpeEl) sharpeEl.textContent = '—';
+        if (ddEl) ddEl.textContent = '—';
+        if (retEl) retEl.textContent = '—';
+        if (periodEl) periodEl.textContent = 'Error';
+    }
+}
+
+window.loadAccuracyDashboard = loadAccuracyDashboard;
+
 async function loadSignals(forceStocks) {
     const container = document.getElementById('signals-container');
     if (!container) return;
     
-    // Show loading state
-    container.innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-3">Loading trading signals...</p></div>';
+    updateSignalsPrecomputeStatus();
+    await updateSignalsAccuracySummary();
+    
+    // Show loading state - Demat holdings load first when Upstox connected
+    container.innerHTML = '<div class="text-center p-4"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-3">Loading trading signals for your Demat holdings...</p><p class="text-muted small mt-2">This may take 30-60 seconds. Signals use Upstox live data when connected.</p></div>';
     
     try {
         let stocks = [];
@@ -1024,12 +1236,15 @@ async function loadSignals(forceStocks) {
                 }
             }
             
-            // Limit to first 15 stocks for performance
-            stocks = stocks.slice(0, 15);
+            // Limit to first 12 stocks for faster first load (fewer parallel requests)
+            stocks = stocks.slice(0, 12);
         }
         
         if (stocks.length === 0) {
-            container.innerHTML = '<div class="empty-state"><i class="fas fa-mouse-pointer"></i><p>No stocks available. Add stocks to watchlist or select a stock to view signals.</p></div>';
+            const msg = signalsSource === 'demat' 
+                ? 'Connect Upstox to see your Demat portfolio signals. Or add stocks to watchlist.'
+                : 'No stocks available. Add stocks to watchlist or connect Upstox for Demat holdings.';
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-briefcase"></i><p>' + msg + '</p></div>';
             return;
         }
         
@@ -1050,11 +1265,16 @@ async function loadSignals(forceStocks) {
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        signal: AbortSignal.timeout(30000) // 30 second timeout
+                        signal: AbortSignal.timeout(60000) // 60s per ticker - demat can have many stocks
                     });
                     
                     if (!response.ok) {
                         const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+                        
+                        // 429 = daily limit (free tier); show upgrade card
+                        if (response.status === 429 && errorData.upgrade) {
+                            return { ticker, signal: { error: errorData.error, hint: errorData.error, upgrade: true, signal: 'N/A', _dataUnavailable: true } };
+                        }
                         
                         // Only log non-404 errors (404s are expected for invalid tickers)
                         if (response.status !== 404) {
@@ -1072,24 +1292,25 @@ async function loadSignals(forceStocks) {
                     
                     const signal = await response.json();
                     if (signal.error && (signal.signal === 'N/A' || !signal.signal)) {
-                        // Graceful degradation: show as Data unavailable instead of skipping
+                        // Graceful degradation: show as Data unavailable with message instead of skipping
                         return { ticker, signal: { ...signal, signal: 'N/A', _dataUnavailable: true } };
                     }
                     if (signal.error) {
-                        console.warn(`Signal error for ${ticker}: ${signal.error}`);
-                        return null;
+                        // Show error in UI instead of dropping the card
+                        const hint = signal.hint || signal.error;
+                        return { ticker, signal: { error: signal.error, hint: hint, days_needed: signal.days_needed, signal: 'N/A', _dataUnavailable: true } };
                     }
                     return { ticker, signal };
                 } catch (error) {
-                    console.error(`Error loading signal for ${ticker} (attempt ${retryCount + 1}/${maxRetries + 1}):`, error);
-                    
-                    // Retry on network errors
-                    if (retryCount < maxRetries && (error.name === 'TypeError' || error.name === 'NetworkError')) {
+                    console.warn(`Error loading signal for ${ticker} (attempt ${retryCount + 1}/${maxRetries + 1}):`, error.message || error);
+                    const isRetryable = error.name === 'TypeError' || error.name === 'NetworkError' ||
+                        error.name === 'AbortError' || error.name === 'TimeoutError' || (error.message && error.message.includes('timeout'));
+                    if (retryCount < maxRetries && isRetryable) {
                         retryCount++;
-                        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)); // Exponential backoff
+                        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
                         continue;
                     }
-                    return null;
+                    return { ticker, signal: { error: error.message || 'Request failed', hint: 'Check connection and try again.', signal: 'N/A', _dataUnavailable: true } };
                 }
             }
             return null;
@@ -1166,13 +1387,18 @@ async function loadSignals(forceStocks) {
                 ${validSignals.map(({ ticker, signal }) => {
                     if (signal._dataUnavailable) {
                         const hint = signal.hint || 'Connect Upstox or verify ticker symbol.';
+                        const etaText = (signal.days_needed != null && signal.days_needed > 0)
+                            ? ` Limited history — signal in ~${signal.days_needed} days.`
+                            : '';
+                        const upgradeLink = signal.upgrade ? '<a href="/pricing" class="btn-modern btn-primary btn-sm mt-2">Upgrade to Pro</a>' : '';
                         return `
                         <div class="signal-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; opacity: 0.9;">
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <h6 style="margin: 0; font-weight: 700; font-size: 1.1rem;">${ticker.replace('.NS', '')}</h6>
-                                <span class="badge bg-secondary" style="font-size: 0.75rem;">Data unavailable</span>
+                                <span class="badge bg-secondary" style="font-size: 0.75rem;">${signal.upgrade ? 'Limit reached' : 'Data unavailable'}</span>
                             </div>
-                            <div style="font-size: 0.8rem; color: var(--text-muted);">${hint}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted);">${hint}${etaText}</div>
+                            ${upgradeLink}
                         </div>`;
                     }
                     const signalClass = signal.signal === 'BUY' ? 'success' : 
@@ -1249,6 +1475,8 @@ async function loadSignals(forceStocks) {
                             </div>
                             
                             ${signal.source ? `<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.5rem; text-align: right;">Source: ${signal.source}</div>` : ''}
+                            ${signal.limited_history ? `<div class="limited-history-notice" style="font-size: 0.7rem; color: var(--warning-color, #f59e0b); margin-top: 0.5rem; padding: 0.25rem 0;"><i class="fas fa-info-circle"></i> Limited history (${signal.days_used || 60}+ days) — use with caution.</div>` : ''}
+                            ${(typeof signalsBacktestReport !== 'undefined' && signalsBacktestReport && signalsBacktestReport.win_rate != null) ? `<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.35rem;">Strategy win rate (5Y backtest): ${signalsBacktestReport.win_rate}%</div>` : ''}
                         </div>
                     `;
                 }).join('')}
@@ -1296,7 +1524,7 @@ async function showIndexSignals() {
     
     try {
         const response = await fetch('/api/index-signals', {
-            signal: AbortSignal.timeout(60000) // 60 second timeout
+            signal: AbortSignal.timeout(120000) // 2 min - index signals run in parallel on backend
         });
         
         if (!response.ok) {
@@ -1365,13 +1593,19 @@ async function showIndexSignals() {
         
     } catch (error) {
         console.error('Error loading index signals:', error);
+        const msg = error.name === 'AbortError' || (error.message && error.message.includes('timeout'))
+            ? 'Request took too long. Try "All Signals" for Demat holdings first, or Retry.'
+            : error.message;
         grid.innerHTML = `
             <div class="text-center text-danger p-4">
                 <i class="fas fa-exclamation-triangle fa-2x mb-3"></i>
                 <p><strong>Error loading index signals</strong></p>
-                <p style="font-size: 0.875rem; color: var(--text-muted);">${error.message}</p>
+                <p style="font-size: 0.875rem; color: var(--text-muted);">${msg}</p>
                 <button class="btn-modern btn-primary mt-3" onclick="showIndexSignals()">
                     <i class="fas fa-sync-alt"></i> Retry
+                </button>
+                <button class="btn-modern btn-secondary mt-3 ms-2" onclick="loadAllSignals()">
+                    <i class="fas fa-list"></i> Show Demat Signals
                 </button>
             </div>
         `;
@@ -1472,16 +1706,16 @@ async function loadAllStocksSignals() {
                     <div style="margin: 0.75rem 0; padding: 0.75rem; background: var(--bg-secondary); border-radius: 4px;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
-                            <span style="color: var(--text-primary); font-weight: 600;">₹${signal.current_price.toLocaleString('en-IN')}</span>
+                            <span style="color: var(--text-primary); font-weight: 600;">₹${(signal.current_price ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         ${signal.signal !== 'HOLD' ? `
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
-                            <span style="color: var(--text-primary);">₹${signal.entry_price.toLocaleString('en-IN')}</span>
+                            <span style="color: var(--text-primary);">₹${(signal.entry_price ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
-                            <span style="color: #ef4444;">₹${signal.stop_loss.toLocaleString('en-IN')}</span>
+                            <span style="color: #ef4444;">₹${(signal.stop_loss ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
@@ -1565,16 +1799,16 @@ async function loadMoreStocksSignals(offset) {
                     <div style="margin: 0.75rem 0; padding: 0.75rem; background: var(--bg-secondary); border-radius: 4px;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
-                            <span style="color: var(--text-primary); font-weight: 600;">₹${signal.current_price.toLocaleString('en-IN')}</span>
+                            <span style="color: var(--text-primary); font-weight: 600;">₹${(signal.current_price ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         ${signal.signal !== 'HOLD' ? `
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
-                            <span style="color: var(--text-primary);">₹${signal.entry_price.toLocaleString('en-IN')}</span>
+                            <span style="color: var(--text-primary);">₹${(signal.entry_price ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
-                            <span style="color: #ef4444;">₹${signal.stop_loss.toLocaleString('en-IN')}</span>
+                            <span style="color: #ef4444;">₹${(signal.stop_loss ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
@@ -1622,8 +1856,7 @@ async function loadAdaptiveEliteSignals() {
             return;
         }
         
-        // Filter to show only BUY/SELL signals (high confidence)
-        const actionableSignals = data.signals.filter(s => s.signal !== 'HOLD' && s.confidence >= 0.70);
+        const summary = data.summary || { buy_signals: 0, sell_signals: 0, hold_signals: 0 };
         const allSignals = data.signals;
         
         // Render signals
@@ -1635,7 +1868,7 @@ async function loadAdaptiveEliteSignals() {
                             <i class="fas fa-chart-line"></i> Adaptive Elite Strategy Signals
                         </h4>
                         <p style="margin: 0.5rem 0 0 0; color: var(--text-muted); font-size: 0.875rem;">
-                            ${data.summary.buy_signals} BUY | ${data.summary.sell_signals} SELL | ${data.summary.hold_signals} HOLD
+                            ${summary.buy_signals || 0} BUY | ${summary.sell_signals || 0} SELL | ${summary.hold_signals || 0} HOLD
                         </p>
                     </div>
                     <div>
@@ -1689,40 +1922,40 @@ async function loadAdaptiveEliteSignals() {
                     <div style="margin: 0.75rem 0; padding: 0.75rem; background: var(--bg-secondary); border-radius: 4px;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
-                            <span style="color: var(--text-primary); font-weight: 600;">₹${signal.current_price.toLocaleString('en-IN')}</span>
+                            <span style="color: var(--text-primary); font-weight: 600;">₹${(signal.current_price ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         ${signal.signal !== 'HOLD' ? `
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
-                            <span style="color: var(--text-primary);">₹${signal.entry_price.toLocaleString('en-IN')}</span>
+                            <span style="color: var(--text-primary);">₹${(signal.entry_price ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
-                            <span style="color: #ef4444;">₹${signal.stop_loss.toLocaleString('en-IN')}</span>
+                            <span style="color: #ef4444;">₹${(signal.stop_loss ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between;">
                             <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
-                            <span style="color: #10b981;">₹${signal.target_1.toLocaleString('en-IN')}</span>
+                            <span style="color: #10b981;">₹${(signal.target_1 ?? 0).toLocaleString('en-IN')}</span>
                         </div>
                         ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
                     </div>
                     
                     <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
                         <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--text-muted);">
-                            <span>${regimeEmoji} ${signal.regime_type}</span>
-                            <span>${signal.market_phase}</span>
+                            <span>${regimeEmoji} ${signal.regime_type || ''}</span>
+                            <span>${signal.market_phase || ''}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; margin-top: 0.25rem; font-size: 0.75rem; color: var(--text-muted);">
-                            <span>Trend: ${signal.trend_strength}</span>
-                            <span>Vol: ${signal.volatility_pct}%</span>
+                            <span>Trend: ${signal.trend_strength ?? ''}</span>
+                            <span>Vol: ${signal.volatility_pct ?? 0}%</span>
                         </div>
                     </div>
                     
                     ${signal.signal !== 'HOLD' ? `
                     <div style="margin-top: 0.75rem;">
-                        <button class="btn-modern btn-primary" onclick="quickOrderFromSignal('${signal.ticker}', '${signal.signal}', ${signal.entry_price})" 
+                        <button class="btn-modern btn-primary" onclick="oneClickTrade('${(signal.ticker || '').replace(/'/g, "\\'")}', '${signal.signal}', ${signal.entry_price ?? 0}, ${signal.stop_loss != null && signal.stop_loss > 0 ? signal.stop_loss : 'null'})" 
                                 style="width: 100%; font-size: 0.875rem;">
-                            <i class="fas fa-shopping-cart"></i> Place Order
+                            <i class="fas fa-bolt"></i> 1-Click ${signal.signal}
                         </button>
                     </div>
                     ` : ''}
@@ -1773,13 +2006,99 @@ function filterActionableSignals() {
 }
 
 function quickOrderFromSignal(ticker, signal, entryPrice) {
-    // Open order placement modal with pre-filled data
+    // Open order placement modal with pre-filled data (legacy / standard mode)
     if (typeof quickOrder === 'function') {
         quickOrder(ticker, signal === 'BUY' ? 'BUY' : 'SELL');
     } else {
         alert(`Place ${signal} order for ${ticker} at ₹${entryPrice.toLocaleString('en-IN')}`);
     }
 }
+
+/**
+ * 1-Click Trade: fetch suggested quantity, show compact confirm, place order on confirm.
+ * @param {string} ticker - e.g. RELIANCE.NS
+ * @param {string} signal - BUY or SELL
+ * @param {number} entryPrice - entry/current price
+ * @param {number|null} stopLoss - optional stop loss for risk-based sizing
+ */
+async function oneClickTrade(ticker, signal, entryPrice, stopLoss) {
+    const side = signal === 'BUY' ? 'BUY' : 'SELL';
+    showNotification('Calculating position size...', 'info');
+    try {
+        const params = new URLSearchParams({
+            ticker: ticker,
+            transaction_type: side,
+            entry_price: String(entryPrice || 0)
+        });
+        if (stopLoss != null && stopLoss > 0) params.set('stop_loss', String(stopLoss));
+        const res = await fetch('/api/order/suggest_quantity?' + params.toString());
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || 'Failed to get suggested quantity');
+        }
+        const qty = data.quantity || 1;
+        const estCost = data.estimated_cost || (qty * entryPrice);
+        const paperMode = await (async () => {
+            try {
+                const s = await fetch('/api/trading-mode').then(r => r.json());
+                return !!s.is_paper;
+            } catch (e) { return false; }
+        })();
+        const warning = paperMode ? '' : '⚠️ LIVE: Real money will be used.';
+        const summary = `${side} ${qty} ${ticker} @ Market | Est. ₹${estCost.toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
+        const modal = document.getElementById('oneClickConfirmModal');
+        const titleEl = document.getElementById('one-click-title');
+        const summaryEl = document.getElementById('one-click-summary');
+        const warningEl = document.getElementById('one-click-warning');
+        const confirmBtn = document.getElementById('one-click-confirm-btn');
+        if (!modal || !summaryEl) {
+            if (typeof quickOrder === 'function') quickOrder(ticker, side);
+            return;
+        }
+        titleEl.textContent = '1-Click Trade';
+        summaryEl.textContent = summary;
+        warningEl.textContent = warning;
+        const bsModal = new bootstrap.Modal(modal);
+        bsModal.show();
+        const onConfirm = async () => {
+            confirmBtn.disabled = true;
+            try {
+                const response = await fetch('/api/upstox/place_order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ticker: ticker,
+                        transaction_type: side,
+                        quantity: qty,
+                        order_type: 'MARKET',
+                        price: null
+                    })
+                });
+                const result = await response.json();
+                bsModal.hide();
+                if (result.status === 'success') {
+                    showNotification(result.message || 'Order placed!', 'success');
+                    if (typeof loadOrders === 'function') loadOrders();
+                    if (typeof loadHoldings === 'function') loadHoldings();
+                } else {
+                    showNotification(result.error || 'Order failed', 'error');
+                }
+            } catch (err) {
+                bsModal.hide();
+                showNotification('Order failed: ' + (err.message || err), 'error');
+            } finally {
+                confirmBtn.disabled = false;
+            }
+        };
+        confirmBtn.onclick = onConfirm;
+        modal.querySelector('[data-bs-dismiss="modal"]')?.addEventListener('click', () => { confirmBtn.onclick = null; }, { once: true });
+    } catch (err) {
+        showNotification(err.message || 'Could not calculate quantity', 'error');
+        if (typeof quickOrder === 'function') quickOrder(ticker, side);
+    }
+}
+
+window.oneClickTrade = oneClickTrade;
 
 async function loadAllSignals() {
     showNotification('Loading signals for all stocks...', 'info');

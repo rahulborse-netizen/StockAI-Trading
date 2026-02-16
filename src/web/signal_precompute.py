@@ -78,9 +78,68 @@ def start_precompute_background(app=None, stocks: Optional[List[str]] = None):
     logger.info(f"[Precompute] Started background pre-computation for {len(stocks or DEFAULT_PRECOMPUTE_STOCKS)} stocks.")
 
 
+def _run_holdings_precompute(holdings: List[dict], app=None):
+    """Pre-compute signals for demat holdings (ticker + instrument_key)."""
+    if not holdings:
+        return
+    try:
+        from src.web.signal_cache import set_cached_signal
+        from src.web.ai_models.elite_signal_generator import get_elite_signal_generator
+
+        generator = get_elite_signal_generator()
+        ctx = app.app_context() if app else None
+        if ctx:
+            ctx.push()
+
+        try:
+            success = 0
+            for h in holdings:
+                ticker = h.get("ticker") or h.get("symbol")
+                inst_key = h.get("instrument_key") or h.get("instrumentKey")
+                if not ticker:
+                    continue
+                try:
+                    result = generator.generate_signal(
+                        ticker=ticker,
+                        use_ensemble=True,
+                        use_multi_timeframe=True,
+                        instrument_key_override=inst_key,
+                    )
+                    if result and "error" not in result:
+                        set_cached_signal(ticker, result)
+                        success += 1
+                except Exception:
+                    pass
+            if success > 0:
+                logger.info(f"[Precompute] Cached {success} holdings signals")
+        finally:
+            if ctx:
+                ctx.pop()
+    except Exception as e:
+        logger.debug(f"[Precompute] Holdings precompute error: {e}")
+
+
+def precompute_holdings_background(holdings: List[dict], app=None):
+    """Pre-compute signals for demat holdings in background (uses instrument_key from instrument_token)."""
+    if not holdings:
+        return
+
+    def _bg():
+        _run_holdings_precompute(holdings=holdings, app=app)
+
+    t = threading.Thread(target=_bg, daemon=True)
+    t.start()
+    logger.info(f"[Precompute] Started holdings pre-computation for {len(holdings)} holdings.")
+
+
 def is_precompute_done() -> bool:
     return _precompute_done
 
 
 def get_precompute_count() -> int:
     return _precompute_count
+
+
+def get_precompute_total() -> int:
+    """Total number of stocks in the default pre-compute list (for progress display)."""
+    return len(DEFAULT_PRECOMPUTE_STOCKS)

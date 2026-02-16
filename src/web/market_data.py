@@ -94,8 +94,8 @@ class MarketDataClient:
             'Authorization': f'Bearer {access_token}',
             'Accept': 'application/json'
         })
-        # Phase 2.1: Add caching
-        self.cache = MarketDataCache(default_ttl=5)
+        # Phase 2.1: Add caching (3s TTL for near-live feel when Upstox connected)
+        self.cache = MarketDataCache(default_ttl=3)
     
     def get_quote(self, instrument_key: str, use_cache: bool = True) -> Optional[Dict]:
         """

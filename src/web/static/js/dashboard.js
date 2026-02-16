@@ -23,11 +23,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // Monitor connection status
         marketDataWS.onConnectionChange((status, error) => {
             updateWebSocketStatus(status, error);
+            if (status === 'connected') startWebSocketStream();
         });
         
         // Listen for global price updates
         window.addEventListener('priceUpdate', (event) => {
-            handleRealtimePriceUpdate(event.detail.instrument_key, event.detail.priceData);
+            handleRealtimePriceUpdate(event.detail.instrument_key, event.detail.priceData, event.detail.ticker);
         });
         
         // Start WebSocket stream when watchlist is loaded
@@ -270,29 +271,27 @@ async function removeFromWatchlist(ticker) {
     }
 }
 
-// Phase 2.1: Start WebSocket stream for watchlist
+// Phase 2.1: Start WebSocket stream for watchlist + holdings + indices (includes NIFTY, SENSEX, etc.)
 async function startWebSocketStream() {
     try {
-        const response = await fetch('/api/watchlist');
-        const watchlist = await response.json();
-        
-        if (watchlist.length > 0 && marketDataWS && marketDataWS.isConnected()) {
-            // Subscribe to watchlist tickers via WebSocket
-            marketDataWS.subscribe(watchlist);
-            
-            // Also start stream on server side
-            const streamResponse = await fetch('/api/market/start_stream', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({tickers: watchlist})
-            });
-            
-            if (!streamResponse.ok) {
-                const errorData = await streamResponse.json().catch(() => ({}));
-                console.error('Error starting market stream:', errorData.error || streamResponse.statusText);
-                if (errorData.message) {
-                    console.error('Details:', errorData.message);
-                }
+        const watchlistRes = await fetch('/api/watchlist');
+        const watchlist = await watchlistRes.json().catch(() => []);
+        const tickersRes = await fetch('/api/signals/tickers?source=both');
+        const tickersData = await tickersRes.json().catch(() => ({}));
+        const dematTickers = tickersData.tickers || [];
+        const allTickers = [...new Set([...(watchlist || []), ...dematTickers])];
+        const streamResponse = await fetch('/api/market/start_stream', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({tickers: allTickers})
+        });
+        if (streamResponse.ok) {
+            const result = await streamResponse.json();
+            console.log('[WebSocket] Stream started:', result.message || 'Subscribed');
+        } else {
+            const errorData = await streamResponse.json().catch(() => ({}));
+            if (errorData.error && !errorData.error.includes('Upstox not connected')) {
+                console.warn('WebSocket stream:', errorData.error || streamResponse.statusText);
             }
         }
     } catch (error) {
@@ -300,39 +299,64 @@ async function startWebSocketStream() {
     }
 }
 
+// Index ticker -> display id mapping for live updates
+const INDEX_TICKER_MAP = { '^NSEI': 'nifty', '^NSEBANK': 'banknifty', '^BSESN': 'sensex', '^INDIAVIX': 'vix' };
+
 // Phase 2.1: Handle real-time price updates from WebSocket
-function handleRealtimePriceUpdate(instrumentKey, priceData) {
+function handleRealtimePriceUpdate(instrumentKey, priceData, tickerFromServer) {
     try {
-        // Map instrument key to ticker (simplified - you may need instrument master)
-        // For now, update all watchlist items and match by instrument key
-        
-        // Update display with real-time data
+        const ltp = priceData.ltp || priceData.price || 0;
+        const close = priceData.close || priceData.close_price || ltp;
         const formattedData = {
-            price: priceData.ltp || 0,
+            price: ltp,
             open: priceData.open || 0,
             high: priceData.high || 0,
             low: priceData.low || 0,
-            close: priceData.close || 0,
+            close: close,
             volume: priceData.volume || 0,
-            change: (priceData.ltp - priceData.close) || 0,
-            change_pct: priceData.close > 0 ? ((priceData.ltp - priceData.close) / priceData.close * 100) : 0
+            change: (ltp - close) || 0,
+            change_pct: close > 0 ? ((ltp - close) / close * 100) : 0
         };
         
-        // Store instrument key mapping (you may need to enhance this)
-        // For now, try to match against watchlist items
-        const watchlistItems = document.querySelectorAll('.watchlist-item');
-        watchlistItems.forEach(item => {
-            const ticker = item.getAttribute('data-ticker');
-            const itemInstrumentKey = item.getAttribute('data-instrument-key');
-            
-            if (itemInstrumentKey === instrumentKey) {
-                updatePriceDisplay(ticker, formattedData, true);
+        const ticker = tickerFromServer || (window.keyToTicker && window.keyToTicker[instrumentKey]);
+        
+        // Update indices (NIFTY, SENSEX, etc.) for live feel
+        if (ticker && INDEX_TICKER_MAP[ticker]) {
+            const id = INDEX_TICKER_MAP[ticker];
+            if (typeof updateIndexDisplay === 'function') {
+                updateIndexDisplay(id, ltp, formattedData.change, formattedData.change_pct);
             }
-        });
+            return;
+        }
         
-        // Update positions P&L if affected
-        updatePositionsPnL(instrumentKey, priceData.ltp);
+        // Update watchlist/holdings by ticker
+        if (ticker) {
+            const items = document.querySelectorAll(`[data-ticker="${ticker}"]`);
+            items.forEach(item => {
+                if (item.closest('#holdings-table-body')) {
+                    if (typeof updateHoldingsRowFromRealtime === 'function') {
+                        updateHoldingsRowFromRealtime(item, ltp, formattedData);
+                    }
+                } else if (typeof updatePriceDisplay === 'function') {
+                    updatePriceDisplay(ticker, formattedData, true);
+                }
+            });
+        } else {
+            const watchlistItems = document.querySelectorAll('.watchlist-item');
+            watchlistItems.forEach(item => {
+                const itemKey = item.getAttribute('data-instrument-key');
+                if (itemKey === instrumentKey) {
+                    const t = item.getAttribute('data-ticker');
+                    if (t && typeof updatePriceDisplay === 'function') {
+                        updatePriceDisplay(t, formattedData, true);
+                    }
+                }
+            });
+        }
         
+        if (typeof updatePositionsPnL === 'function') {
+            updatePositionsPnL(instrumentKey, ltp);
+        }
     } catch (error) {
         console.error('Error handling real-time price update:', error);
     }
@@ -341,25 +365,31 @@ function handleRealtimePriceUpdate(instrumentKey, priceData) {
 // Phase 2.1: Update WebSocket connection status indicator
 function updateWebSocketStatus(status, error = null) {
     const statusEl = document.getElementById('ws-connection-status');
-    if (!statusEl) return;
-    
-    const statusMessages = {
-        'connected': '🟢 Live',
-        'disconnected': '🔴 Offline',
-        'error': '🟠 Error'
-    };
-    
-    statusEl.innerHTML = statusMessages[status] || '⚫ Unknown';
-    
-    if (status === 'connected') {
-        statusEl.style.color = 'var(--success-color)';
-    } else if (status === 'error') {
-        statusEl.style.color = 'var(--warning-color)';
-        if (error) {
-            console.error('WebSocket error:', error);
+    if (statusEl) {
+        const statusMessages = {
+            'connected': '🟢 Live',
+            'disconnected': '🔴 Offline',
+            'error': '🟠 Error'
+        };
+        statusEl.innerHTML = statusMessages[status] || '⚫ Unknown';
+        if (status === 'connected') {
+            statusEl.style.color = 'var(--success-color)';
+        } else if (status === 'error') {
+            statusEl.style.color = 'var(--warning-color)';
+            if (error) console.error('WebSocket error:', error);
+        } else {
+            statusEl.style.color = 'var(--danger-color)';
         }
-    } else {
-        statusEl.style.color = 'var(--danger-color)';
+    }
+    const indicesBar = document.getElementById('indices-container-main');
+    if (indicesBar) {
+        if (status === 'connected') {
+            indicesBar.classList.add('indices-live');
+            indicesBar.title = 'Live data from Upstox';
+        } else {
+            indicesBar.classList.remove('indices-live');
+            indicesBar.title = '';
+        }
     }
 }
 
@@ -475,7 +505,7 @@ async function showLevels(ticker) {
             <div class="fade-in">
                 <div class="level-item entry mb-3">
                     <div class="level-label">Current Price</div>
-                    <div class="level-value">₹${signal.current_price.toFixed(2)}</div>
+                    <div class="level-value">₹${(signal.current_price ?? 0).toFixed(2)}</div>
                 </div>
                 <div class="d-flex align-items-center gap-2 mb-3 p-2" style="background: var(--bg-secondary); border-radius: 8px;">
                     <div class="stat-icon" style="width: 40px; height: 40px;">
@@ -486,43 +516,43 @@ async function showLevels(ticker) {
                         <div class="level-value" style="font-size: 1.25rem;">
                             <span class="badge bg-${signalClass}">${signal.signal}</span>
                             <span class="ms-2" style="font-size: 0.875rem; color: var(--text-muted);">
-                                ${(signal.probability * 100).toFixed(1)}% confidence
+                                ${((signal.probability ?? 0) * 100).toFixed(1)}% confidence
                             </span>
                         </div>
                     </div>
                 </div>
                 <div class="level-item entry">
                     <div class="level-label">Entry Level</div>
-                    <div class="level-value">₹${signal.entry_level.toFixed(2)}</div>
+                    <div class="level-value">₹${(signal.entry_level ?? signal.entry_price ?? 0).toFixed(2)}</div>
                 </div>
                 <div class="level-item stop-loss">
                     <div class="level-label">Stop Loss</div>
-                    <div class="level-value">₹${signal.stop_loss.toFixed(2)} 
+                    <div class="level-value">₹${(signal.stop_loss ?? 0).toFixed(2)} 
                         <span style="font-size: 0.875rem; color: var(--text-muted);">
-                            (${((signal.stop_loss - signal.current_price) / signal.current_price * 100).toFixed(2)}%)
+                            (${((signal.current_price ?? 0) > 0 ? ((signal.stop_loss ?? 0) - (signal.current_price ?? 0)) / (signal.current_price ?? 1) * 100 : 0).toFixed(2)}%)
                         </span>
                     </div>
                 </div>
                 <div class="level-item target">
                     <div class="level-label">Target 1</div>
-                    <div class="level-value">₹${signal.target_1.toFixed(2)} (+2.0%)</div>
+                    <div class="level-value">₹${(signal.target_1 ?? 0).toFixed(2)} (+2.0%)</div>
                 </div>
                 <div class="level-item target">
                     <div class="level-label">Target 2</div>
-                    <div class="level-value">₹${signal.target_2.toFixed(2)} (+2.5%)</div>
+                    <div class="level-value">₹${(signal.target_2 ?? 0).toFixed(2)} (+2.5%)</div>
                 </div>
                 <div class="mt-3 p-2" style="background: var(--bg-secondary); border-radius: 8px; font-size: 0.875rem;">
                     <div class="d-flex justify-content-between mb-1">
                         <span class="text-muted">Recent High:</span>
-                        <span>₹${signal.recent_high.toFixed(2)}</span>
+                        <span>₹${(signal.recent_high ?? 0).toFixed(2)}</span>
                     </div>
                     <div class="d-flex justify-content-between mb-1">
                         <span class="text-muted">Recent Low:</span>
-                        <span>₹${signal.recent_low.toFixed(2)}</span>
+                        <span>₹${(signal.recent_low ?? 0).toFixed(2)}</span>
                     </div>
                     <div class="d-flex justify-content-between">
                         <span class="text-muted">Volatility:</span>
-                        <span>${(signal.volatility * 100).toFixed(2)}%</span>
+                        <span>${((signal.volatility ?? 0) * 100).toFixed(2)}%</span>
                     </div>
                 </div>
                 <div class="mt-3">
@@ -934,9 +964,14 @@ async function connectUpstox() {
             }
             const modal = bootstrap.Modal.getInstance(document.getElementById('upstoxModal'));
             if (modal) modal.hide();
+            window.upstoxConnected = true;
             loadOrders();
             loadHoldings();
             showNotification('✅ Upstox connected successfully!', 'success');
+            // Auto-start WebSocket stream for live indices and holdings (Phase 4)
+            if (typeof startWebSocketStream === 'function') {
+                setTimeout(startWebSocketStream, 500);
+            }
         } else if (result.status === 'auth_required') {
             // IMPORTANT: Restore button immediately - OAuth requires user action, not waiting
             if (connectBtn) {

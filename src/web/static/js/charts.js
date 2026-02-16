@@ -471,30 +471,47 @@ async function tryMultipleTickerFormats(symbol) {
 
 /**
  * Get trading signal for a stock
+ * @param {string} symbol - Stock symbol (e.g. NTPC)
+ * @param {string|null} ticker - Optional ticker (e.g. NTPC.NS)
+ * @param {string|null} instrumentKey - Optional Upstox instrument_key for holdings (bypasses lookup, uses Upstox historical)
  */
-async function getStockSignal(symbol, ticker = null) {
+async function getStockSignal(symbol, ticker = null, instrumentKey = null) {
     try {
         const stockTicker = ticker || convertSymbolToTicker(symbol);
         if (!stockTicker) {
             return { signal: 'N/A', color: 'muted', hint: 'Ticker not found' };
         }
-        
-        const response = await fetch(`/api/signals/${encodeURIComponent(stockTicker)}`);
+
+        const hintWhenMissing = !instrumentKey
+            ? 'Instrument key missing; connect Upstox and load holdings'
+            : 'Connect Upstox for live data';
+
+        let url = `/api/signals/${encodeURIComponent(stockTicker)}`;
+        if (instrumentKey) {
+            url += '?instrument_key=' + encodeURIComponent(instrumentKey);
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
         const signalData = await response.json();
-        
+
         // Handle 200 with error (graceful degradation from API)
         if (signalData.error && (signalData.signal === 'N/A' || !signalData.signal)) {
+            const hint = signalData.hint || hintWhenMissing;
             return {
                 signal: 'Data unavailable',
                 color: 'muted',
-                hint: signalData.hint || 'Connect Upstox for live data'
+                hint: hint
             };
         }
-        
+
         if (!response.ok) {
-            return { signal: 'N/A', color: 'muted', hint: 'Request failed' };
+            return { signal: 'N/A', color: 'muted', hint: signalData.hint || 'Request failed' };
         }
-        
+
         if (signalData.signal === 'BUY') {
             return { signal: 'BUY', color: 'success', probability: signalData.probability };
         } else if (signalData.signal === 'SELL') {
@@ -503,7 +520,11 @@ async function getStockSignal(symbol, ticker = null) {
             return { signal: 'HOLD', color: 'warning', probability: signalData.probability };
         }
     } catch (error) {
+        const isTimeout = error && error.name === 'AbortError';
+        const hint = isTimeout
+            ? 'Request timed out (45s); try again later'
+            : (!instrumentKey ? 'Instrument key missing; connect Upstox' : 'Connect Upstox for live data');
         console.error(`[Signal] Error getting signal for ${symbol}:`, error);
-        return { signal: 'N/A', color: 'muted', hint: 'Connect Upstox for live data' };
+        return { signal: 'N/A', color: 'muted', hint: hint };
     }
 }

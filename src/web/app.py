@@ -30,6 +30,7 @@ import pandas as pd
 import numpy as np
 from urllib.parse import urlencode
 import requests
+import socket
 
 from dotenv import load_dotenv
 
@@ -218,6 +219,34 @@ def trading_signals():
     """Trading signals UI page"""
     return render_template('trading_signals.html')
 
+
+@app.route('/pricing')
+def pricing():
+    """Landing / pricing page for subscription tiers (Stripe/Razorpay integration placeholder)."""
+    return render_template('pricing.html')
+
+
+@app.route('/api/subscription/tier')
+def get_subscription_tier():
+    """Get current user's subscription tier and limits (for feature gating and UI)."""
+    try:
+        from src.web.subscription_config import get_user_tier, TIER_LIMITS, get_daily_signal_count, get_signals_per_day_limit
+        tier = get_user_tier()
+        limits = TIER_LIMITS.get(tier, TIER_LIMITS['free'])
+        user_key = request.remote_addr or 'anonymous'
+        used = get_daily_signal_count(user_key)
+        limit = get_signals_per_day_limit(tier)
+        return jsonify({
+            'tier': tier,
+            'signals_per_day': limit,
+            'signals_used_today': used,
+            'auto_trade': limits.get('auto_trade', False),
+            'export_csv': limits.get('export_csv', False),
+        })
+    except Exception as e:
+        logger.debug(f"Subscription tier failed: {e}")
+        return jsonify({'tier': 'free', 'signals_per_day': 5, 'signals_used_today': 0, 'auto_trade': False, 'export_csv': False})
+
 @app.route('/api/watchlist')
 def get_watchlist():
     """Get current watchlist"""
@@ -233,6 +262,24 @@ def add_to_watchlist():
         watchlist_manager.add_ticker(ticker)
         return jsonify({'status': 'success', 'message': f'{ticker} added to watchlist'})
     return jsonify({'status': 'error', 'message': 'Ticker required'}), 400
+
+@app.route('/api/watchlist/keys')
+def get_watchlist_keys():
+    """Get ticker -> instrument_key mapping for watchlist (for WebSocket subscriptions). Requires Upstox connected."""
+    client = _get_upstox_client()
+    if not client or not client.access_token:
+        return jsonify({'ticker_keys': {}, 'tickers': []})
+    watchlist = watchlist_manager.get_watchlist()
+    instrument_master = InstrumentMaster()
+    ticker_keys = {}
+    for ticker in (watchlist or []):
+        t = str(ticker).strip()
+        if t:
+            key = instrument_master.get_instrument_key(t)
+            if key:
+                ticker_keys[t] = key
+    return jsonify({'ticker_keys': ticker_keys, 'tickers': list(ticker_keys.keys())})
+
 
 @app.route('/api/watchlist/remove', methods=['POST'])
 def remove_from_watchlist():
@@ -481,6 +528,7 @@ def get_signals(ticker):
         trading_type = request.args.get('trading_type', 'swing')
         force_refresh = request.args.get('refresh', 'false').lower() == 'true'
         instrument_key = request.args.get('instrument_key', '').strip() or None  # From holdings - bypass instrument master
+        logger.info(f"[Signals] ticker={ticker} instrument_key={'provided' if instrument_key else 'none'}")
         
         # Serve from pre-computed cache first (unless refresh requested)
         if not force_refresh:
@@ -492,6 +540,17 @@ def get_signals(ticker):
                     return jsonify(cached)
             except Exception as cache_err:
                 logger.debug(f"[Signals] Cache check failed: {cache_err}")
+        
+        # Subscription tier: free tier has daily signal limit (cache doesn't count)
+        try:
+            from src.web.subscription_config import get_user_tier, can_request_signal, record_signal_usage
+            user_key = request.remote_addr or 'anonymous'
+            tier = get_user_tier()
+            allowed, msg = can_request_signal(user_key, tier)
+            if not allowed:
+                return jsonify({'error': msg, 'ticker': ticker, 'upgrade': True}), 429
+        except Exception as sub_err:
+            logger.debug(f"[Signals] Subscription check skipped: {sub_err}")
         
         # Use ELITE signal generator if enabled
         if use_elite:
@@ -506,6 +565,11 @@ def get_signals(ticker):
                 
                 # Check if signal_response is valid
                 if signal_response and 'error' not in signal_response:
+                    try:
+                        from src.web.subscription_config import record_signal_usage
+                        record_signal_usage(request.remote_addr or 'anonymous')
+                    except Exception:
+                        pass
                     # Generate trade plan if requested
                     if generate_plan:
                         try:
@@ -548,7 +612,7 @@ def get_signals(ticker):
                 elif signal_response and 'error' in signal_response:
                     # ELITE returned an error - return 200 with structured response (graceful degradation)
                     hint = signal_response.get('hint') or 'Historical data unavailable. Connect Upstox or verify ticker symbol.'
-                    logger.warning(f"[Signals] ELITE system returned error: {signal_response.get('error', 'Unknown error')} - {hint}")
+                    logger.warning(f"[Signals] ELITE error for {ticker} (instrument_key={'yes' if instrument_key else 'no'}): {signal_response.get('error', 'Unknown error')} - {hint}")
                     return jsonify({
                         'signal': 'N/A',
                         'error': signal_response.get('error', 'Data unavailable'),
@@ -818,92 +882,59 @@ def get_model_rankings():
 
 @app.route('/api/index-signals')
 def get_all_index_signals():
-    """Get trading signals for all major indices using Adaptive Elite Strategy with multi-timeframe support"""
-    from src.web.market_hours import get_market_hours_manager
-    from src.web.ai_models.multi_timeframe_signal import get_multi_timeframe_aggregator
-    
+    """Get trading signals for major indices. Sequential (needs Flask request context for Upstox)."""
     indices = [
         {'name': 'Nifty 50', 'ticker': '^NSEI', 'key': 'nifty50'},
         {'name': 'Bank Nifty', 'ticker': '^NSEBANK', 'key': 'banknifty'},
         {'name': 'Sensex', 'ticker': '^BSESN', 'key': 'sensex'},
-        {'name': 'Nifty 100', 'ticker': '^CNX100', 'key': 'nifty100'},
-        {'name': 'Nifty 500', 'ticker': '^CNX500', 'key': 'nifty500'},
         {'name': 'India VIX', 'ticker': '^INDIAVIX', 'key': 'indiavix'}
     ]
     
-    # Get timeframe parameter (default: all timeframes)
-    timeframe = request.args.get('timeframe', 'all')  # '5m', '15m', '1h', '1d', 'all'
-    timeframes = ['5m', '15m', '1h', '1d'] if timeframe == 'all' else [timeframe]
-    
-    # Check if intraday
-    market_hours = get_market_hours_manager()
-    is_intraday = market_hours.is_market_open()
-    
     results = []
     elite_generator = get_elite_signal_generator()
-    multi_tf_aggregator = get_multi_timeframe_aggregator()
     
     for index in indices:
         try:
-            logger.info(f"[Index Signals] Processing {index['name']} ({index['ticker']}) - timeframes: {timeframes}")
-            
-            # Use multi-timeframe aggregator for intraday support
-            if timeframe == 'all' or len(timeframes) > 1:
-                # Multi-timeframe signal
-                signal_response = multi_tf_aggregator.generate_multi_timeframe_signal(
-                    ticker=index['ticker'],
-                    timeframes=timeframes,
-                    is_intraday=is_intraday,
-                    use_ensemble=True,
-                    min_confidence=0.6
-                )
+            from src.web.signal_cache import get_cached_signal
+            cached = get_cached_signal(index['ticker'])
+            if cached:
+                signal_response = cached
             else:
-                # Single timeframe signal
-                signal_response = elite_generator.generate_intraday_signal(
+                signal_response = elite_generator.generate_signal(
                     ticker=index['ticker'],
-                    timeframe=timeframes[0],
-                    use_ensemble=True
+                    use_ensemble=True,
+                    use_multi_timeframe=False,
+                    instrument_key_override=None
                 )
-            
             if 'error' in signal_response:
-                logger.warning(f"[Index Signals] Error for {index['name']}: {signal_response.get('error')}")
+                logger.warning(f"[Index Signals] {index['name']}: {signal_response.get('error')}")
                 continue
-            
-            # Format response for index signals
-            result = {
+            if not signal_response.get('current_price') and signal_response.get('close'):
+                signal_response['current_price'] = signal_response['close']
+            results.append({
                 'index_name': index['name'],
                 'index_key': index['key'],
                 'ticker': index['ticker'],
                 'current_price': signal_response.get('current_price', 0),
-                'signal': signal_response.get('signal') or signal_response.get('consensus_signal', 'HOLD'),
-                'probability': signal_response.get('probability', signal_response.get('confidence', 0.5)),
+                'signal': signal_response.get('signal', 'HOLD'),
+                'probability': signal_response.get('probability', 0.5),
                 'confidence': signal_response.get('confidence', 0.5),
                 'entry_level': signal_response.get('entry_level', signal_response.get('entry_price', 0)),
                 'entry_price': signal_response.get('entry_level', signal_response.get('entry_price', 0)),
                 'stop_loss': signal_response.get('stop_loss', 0),
                 'target_1': signal_response.get('target_1', 0),
                 'target_2': signal_response.get('target_2', 0),
-                'timeframe': timeframe,
-                'timeframes_analyzed': timeframes,
-                'is_intraday': is_intraday,
+                'regime_type': signal_response.get('regime_type', ''),
+                'volatility': signal_response.get('volatility', 0),
+                'recent_high': signal_response.get('recent_high', 0),
+                'recent_low': signal_response.get('recent_low', 0),
                 'timestamp': signal_response.get('timestamp', datetime.now().isoformat())
-            }
-            
-            # Add multi-timeframe details if available
-            if 'timeframe_signals' in signal_response:
-                result['timeframe_signals'] = signal_response['timeframe_signals']
-            
-            # Add volatility and other metrics
-            result['volatility'] = signal_response.get('volatility', 0)
-            result['recent_high'] = signal_response.get('recent_high', 0)
-            result['recent_low'] = signal_response.get('recent_low', 0)
-            
-            results.append(result)
+            })
         except Exception as e:
-            logger.error(f"[Index Signals] Error for {index['name']}: {e}", exc_info=True)
-            continue
+            logger.error(f"[Index Signals] {index['name']}: {e}", exc_info=True)
     
     return jsonify(results)
+
 
 # ============================================================================
 # Trade Plan API Endpoints
@@ -1417,28 +1448,42 @@ def start_stream():
         ws_manager = get_ws_manager()
         
         # Connect to WebSocket if not already connected
+        # (init_websocket_handlers already registers broadcast with price_data + ticker)
         if not ws_manager.is_connected():
             ws_manager.set_access_token(client.access_token)
             success = ws_manager.connect()
             if not success:
                 return jsonify({'error': 'Failed to connect to Upstox WebSocket'}), 500
-            
-            # Register callback to broadcast price updates to Flask-SocketIO clients
-            def broadcast_price_update(instrument_key, price_data):
-                socketio.emit('price_update', {
-                    'instrument_key': instrument_key,
-                    'data': price_data
-                }, broadcast=True)
-            
-            ws_manager.add_price_callback(broadcast_price_update)
         
-        # Convert tickers to instrument keys if provided
+        # Convert tickers to instrument keys if provided; build ticker_to_key for broadcast
+        instrument_master = InstrumentMaster()
+        ticker_to_key = {}
         if tickers:
-            instrument_master = InstrumentMaster()
             for ticker in tickers:
                 inst_key = instrument_master.get_instrument_key(ticker)
                 if inst_key:
                     instrument_keys.append(inst_key)
+                    ticker_to_key[ticker] = inst_key
+        
+        # Add indices for live index updates
+        index_map = [
+            ('^NSEI', 'nifty'),
+            ('^NSEBANK', 'banknifty'),
+            ('^BSESN', 'sensex'),
+            ('^INDIAVIX', 'vix'),
+        ]
+        for ticker, _ in index_map:
+            inst_key = instrument_master.get_instrument_key(ticker)
+            if inst_key and inst_key not in instrument_keys:
+                instrument_keys.append(inst_key)
+                ticker_to_key[ticker] = inst_key
+        
+        # Update key->ticker map for price_update broadcast
+        try:
+            from src.web.websocket_server import update_key_to_ticker_map
+            update_key_to_ticker_map(ticker_to_key)
+        except Exception:
+            pass
         
         # Subscribe to instruments
         if instrument_keys:
@@ -2523,6 +2568,124 @@ def cancel_order(order_id):
         logger.error(f"Error cancelling order: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/order/suggest_quantity', methods=['GET'])
+def suggest_quantity():
+    """
+    Suggest quantity for 1-click trading based on risk config and portfolio value.
+    Input: ticker, transaction_type (BUY/SELL), entry_price, stop_loss (optional)
+    Returns: quantity, estimated_cost, risk_amount
+    """
+    ticker = request.args.get('ticker', '').strip()
+    transaction_type = (request.args.get('transaction_type') or 'BUY').upper()
+    entry_price_arg = request.args.get('entry_price')
+    stop_loss_arg = request.args.get('stop_loss')
+
+    if not ticker:
+        return jsonify({'error': 'ticker required'}), 400
+    if transaction_type not in ('BUY', 'SELL'):
+        return jsonify({'error': 'transaction_type must be BUY or SELL'}), 400
+
+    try:
+        entry_price = float(entry_price_arg) if entry_price_arg else None
+        stop_loss = float(stop_loss_arg) if stop_loss_arg else None
+    except (TypeError, ValueError):
+        return jsonify({'error': 'entry_price and stop_loss must be numeric'}), 400
+
+    rc = get_risk_config()
+    max_risk_pct = rc.get('max_risk_per_trade', 0.02)
+    max_position_pct = rc.get('max_position_size', 0.20)
+    min_lot = rc.get('min_lot_size', 1)
+
+    # Get portfolio value from Upstox holdings or default
+    portfolio_value = 100000.0
+    client = _get_upstox_client()
+    if client:
+        try:
+            holdings = client.get_holdings()
+            if holdings:
+                portfolio_value = sum(
+                    float(h.get('quantity', 0) or h.get('qty', 0) or 0) *
+                    float(h.get('last_price', 0) or h.get('ltp', 0) or h.get('close_price', 0) or 0)
+                    for h in holdings
+                )
+                if portfolio_value <= 0:
+                    portfolio_value = 100000.0
+        except Exception as e:
+            logger.debug(f"[SuggestQuantity] Holdings fetch failed: {e}")
+
+    risk_amount = portfolio_value * max_risk_pct
+
+    # Get LTP if entry_price not provided
+    if entry_price is None or entry_price <= 0:
+        try:
+            dsm = get_data_source_manager()
+            quote, _ = dsm.get_quote(ticker, use_cache=True)
+            if quote and quote.get('current_price', 0) > 0:
+                entry_price = float(quote['current_price'])
+        except Exception:
+            pass
+        if entry_price is None or entry_price <= 0:
+            entry_price = 100.0
+
+    # Calculate quantity
+    from src.web.position_sizing import calculate_risk_based_size
+
+    if stop_loss is not None and stop_loss > 0 and stop_loss != entry_price:
+        quantity = calculate_risk_based_size(
+            entry=entry_price,
+            stop_loss=stop_loss,
+            risk_amount=risk_amount,
+            lot_size=min_lot
+        )
+    else:
+        # No stop_loss: use fixed % of capital (max_position_pct)
+        max_position_value = portfolio_value * max_position_pct
+        raw_qty = int(max_position_value / entry_price) if entry_price > 0 else 1
+        quantity = max(min_lot, raw_qty) if raw_qty > 0 else min_lot
+
+    # Cap by max position size
+    max_qty_from_position = int((portfolio_value * max_position_pct) / entry_price)
+    quantity = min(quantity, max_qty_from_position) if max_qty_from_position > 0 else quantity
+    quantity = max(min_lot, quantity)
+
+    estimated_cost = quantity * entry_price
+    return jsonify({
+        'quantity': quantity,
+        'estimated_cost': round(estimated_cost, 2),
+        'risk_amount': round(risk_amount, 2),
+        'entry_price': entry_price,
+        'portfolio_value': round(portfolio_value, 2),
+    })
+
+
+@app.route('/api/order/ready', methods=['GET'])
+def order_ready():
+    """
+    Pre-fetch order readiness: instrument_key, ltp in one call.
+    Use on hover over Place Order to warm cache and speed up 1-click flow.
+    """
+    ticker = request.args.get('ticker', '').strip()
+    if not ticker:
+        return jsonify({'error': 'ticker required'}), 400
+
+    result = {'ticker': ticker, 'instrument_key': None, 'ltp': None}
+    try:
+        from src.web.instrument_master import get_instrument_master
+        im = get_instrument_master()
+        result['instrument_key'] = im.get_instrument_key(ticker)
+    except Exception:
+        pass
+    try:
+        dsm = get_data_source_manager()
+        quote, _ = dsm.get_quote(ticker, use_cache=True)
+        if quote and quote.get('current_price', 0) > 0:
+            result['ltp'] = float(quote['current_price'])
+    except Exception:
+        pass
+    return jsonify(result)
+
+
 @app.route('/api/upstox/place_order', methods=['POST'])
 def place_order():
     """Phase 2.5: Place order through Upstox (real trading) or Paper Trading (simulation)"""
@@ -2687,28 +2850,35 @@ def get_stocks_universe():
 
 @app.route('/api/top_stocks')
 def get_top_stocks():
-    """Get top performing stocks from backtest"""
-    # Based on our analysis - expanded list
-    top_stocks = [
-        {'ticker': 'LT.NS', 'name': 'Larsen & Toubro', 'return': 4.00, 'sharpe': 1.48},
-        {'ticker': 'HDFCBANK.NS', 'name': 'HDFC Bank', 'return': 2.77, 'sharpe': 2.93},
-        {'ticker': 'BAJFINANCE.NS', 'name': 'Bajaj Finance', 'return': 2.55, 'sharpe': 0.91},
-        {'ticker': 'INFY.NS', 'name': 'Infosys', 'return': 1.91, 'sharpe': 1.23},
-        {'ticker': 'KOTAKBANK.NS', 'name': 'Kotak Mahindra Bank', 'return': 1.56, 'sharpe': 0.91},
-        {'ticker': 'TCS.NS', 'name': 'TCS', 'return': 1.50, 'sharpe': 0.85},
-        {'ticker': 'RELIANCE.NS', 'name': 'Reliance Industries', 'return': 1.20, 'sharpe': 0.65},
-        {'ticker': 'ICICIBANK.NS', 'name': 'ICICI Bank', 'return': 0.42, 'sharpe': 0.16},
-        {'ticker': 'SBIN.NS', 'name': 'State Bank of India', 'return': 1.08, 'sharpe': 0.25},
-        {'ticker': 'ITC.NS', 'name': 'ITC', 'return': 0.02, 'sharpe': 0.03},
-        {'ticker': '^NSEI', 'name': 'NIFTY 50', 'return': 0.00, 'sharpe': 0.00},
-        {'ticker': '^NSEBANK', 'name': 'Bank Nifty', 'return': 0.00, 'sharpe': 0.00},
-    ]
-    return jsonify(top_stocks)
+    """Get 50-100 stocks from stock universe for sidebar (curated/liquidity order when available)."""
+    try:
+        su = get_stock_universe()
+        result = su.get_stocks_page(exchange=None, limit=80, offset=0, search=None)
+        stocks = result.get('stocks') or []
+        # Format expected by frontend: ticker, name, return, sharpe (optional)
+        out = [
+            {'ticker': s.get('ticker', ''), 'name': s.get('name') or s.get('tradingsymbol', s.get('ticker', '')), 'return': 0.0, 'sharpe': 0.0}
+            for s in stocks
+        ]
+        # If universe is empty, fallback to a minimal list
+        if not out:
+            out = [
+                {'ticker': '^NSEI', 'name': 'NIFTY 50', 'return': 0.0, 'sharpe': 0.0},
+                {'ticker': '^NSEBANK', 'name': 'Bank Nifty', 'return': 0.0, 'sharpe': 0.0},
+            ]
+        return jsonify(out)
+    except Exception as e:
+        logger.exception("Top stocks API failed")
+        return jsonify([
+            {'ticker': '^NSEI', 'name': 'NIFTY 50', 'return': 0.0, 'sharpe': 0.0},
+            {'ticker': '^NSEBANK', 'name': 'Bank Nifty', 'return': 0.0, 'sharpe': 0.0},
+        ])
 
 
 def _holding_to_ticker_and_key(h: dict) -> Tuple[Optional[str], Optional[str]]:
-    """Extract (ticker, instrument_key) from holding. instrument_key from Upstox is used for historical API."""
-    instrument_key = h.get('instrument_key') or h.get('instrumentKey') or ''
+    """Extract (ticker, instrument_key) from holding. instrument_key from Upstox is used for historical API.
+    Upstox holdings API returns instrument_token (not instrument_key)."""
+    instrument_key = h.get('instrument_key') or h.get('instrumentKey') or h.get('instrument_token') or ''
     inst_key_upper = (instrument_key or '').upper()
     symbol = (h.get('tradingsymbol') or h.get('trading_symbol') or h.get('symbol') or
               h.get('name') or h.get('company_name') or '')
@@ -2739,6 +2909,70 @@ def _holding_to_ticker(h: dict) -> Optional[str]:
     """Extract normalized ticker from holding (e.g. RELIANCE.NS, BSE.BO)."""
     t, _ = _holding_to_ticker_and_key(h)
     return t
+
+
+@app.route('/api/portfolio/signals')
+def get_portfolio_signals():
+    """
+    Get Demat holdings with ELITE algorithm signals. Single API for portfolio + predictions.
+    Requires Upstox connected.
+    """
+    client = _get_upstox_client()
+    if not client or not client.access_token:
+        return jsonify({
+            'error': 'Upstox not connected',
+            'hint': 'Connect Upstox to see portfolio signals',
+            'holdings': [],
+            'signals': []
+        }), 200
+    try:
+        holdings = client.get_holdings()
+        if not holdings:
+            return jsonify({
+                'holdings': [],
+                'signals': [],
+                'message': 'No Demat holdings. Add stocks to your Upstox account.'
+            })
+        elite = get_elite_signal_generator()
+        from src.web.signal_cache import get_cached_signal
+        results = []
+        for h in holdings:
+            ticker, inst_key = _holding_to_ticker_and_key(h)
+            if not ticker:
+                continue
+            sym = h.get('tradingsymbol') or h.get('trading_symbol') or ticker.replace('.NS', '').replace('.BO', '')
+            qty = float(h.get('quantity', 0) or h.get('qty', 0) or 0)
+            ltp = float(h.get('last_price', 0) or h.get('ltp', 0) or 0)
+            avg = float(h.get('average_price', 0) or h.get('avg_price', 0) or 0)
+            signal_data = get_cached_signal(ticker)
+            if not signal_data:
+                try:
+                    signal_data = elite.generate_signal(
+                        ticker=ticker,
+                        use_ensemble=True,
+                        use_multi_timeframe=False,
+                        instrument_key_override=inst_key
+                    )
+                except Exception as e:
+                    signal_data = {'error': str(e)[:80], 'signal': 'N/A'}
+            signal = signal_data.get('signal', 'HOLD') if signal_data and 'error' not in signal_data else 'N/A'
+            prob = signal_data.get('probability', 0.5) if signal_data and 'error' not in signal_data else 0
+            results.append({
+                'symbol': sym,
+                'ticker': ticker,
+                'qty': qty,
+                'ltp': ltp,
+                'avg_price': avg,
+                'signal': signal,
+                'probability': prob,
+                'entry_level': signal_data.get('entry_level', 0) if signal_data and 'error' not in signal_data else 0,
+                'stop_loss': signal_data.get('stop_loss', 0) if signal_data and 'error' not in signal_data else 0,
+                'target_1': signal_data.get('target_1', 0) if signal_data and 'error' not in signal_data else 0,
+            })
+        return jsonify({'holdings': results, 'signals': results})
+    except Exception as e:
+        logger.error(f"Portfolio signals error: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'holdings': [], 'signals': []}), 500
 
 
 @app.route('/api/signals/tickers')
@@ -2786,13 +3020,64 @@ def get_signals_tickers():
 
 @app.route('/api/signals/cache-status')
 def get_signals_cache_status():
-    """Get pre-computed signal cache status (count, last_updated)."""
+    """Get pre-computed signal cache status (count, total, done, last_updated) for UI progress."""
     try:
         from src.web.signal_cache import get_cache_meta
+        from src.web.signal_precompute import is_precompute_done, get_precompute_total
         meta = get_cache_meta()
-        return jsonify(meta)
+        total = get_precompute_total()
+        cached = meta.get('count') or 0
+        return jsonify({
+            'count': cached,
+            'cached': cached,
+            'total': total,
+            'done': is_precompute_done(),
+            'last_updated': meta.get('last_updated'),
+            'computed_at': meta.get('computed_at'),
+        })
     except Exception as e:
-        return jsonify({'count': 0, 'error': str(e)})
+        return jsonify({'count': 0, 'cached': 0, 'total': 30, 'done': False, 'error': str(e)})
+
+
+@app.route('/api/risk/status')
+def get_risk_status():
+    """Get risk controls status: position sizing (risk per trade), daily loss limit, circuit breaker."""
+    try:
+        from src.web.risk_config import get_risk_config
+        rc = get_risk_config()
+        at = getattr(app, '_auto_trader', None)
+        circuit_triggered = at.circuit_breaker_triggered if at else False
+        daily_pnl = at.daily_pnl if at else 0.0
+        return jsonify({
+            'risk_per_trade_pct': round((rc.get('max_risk_per_trade', 0.02) or 0.02) * 100, 2),
+            'max_position_size_pct': round((rc.get('max_position_size', 0.20) or 0.20) * 100, 2),
+            'daily_loss_limit_pct': round((rc.get('daily_loss_limit_pct', 0.10) or 0.10) * 100, 2),
+            'daily_loss_limit_amount': rc.get('daily_loss_limit_amount'),
+            'max_open_positions': rc.get('max_open_positions', 10),
+            'circuit_breaker_triggered': circuit_triggered,
+            'daily_pnl': daily_pnl,
+        })
+    except Exception as e:
+        logger.exception("Risk status failed")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/backtest/report')
+def get_backtest_report():
+    """Get ELITE backtest report (win rate, Sharpe, max drawdown) for NIFTY 50. Serves cached report; ?refresh=1 regenerates."""
+    try:
+        from src.web.accuracy_reports import load_report, generate_and_save_report
+        refresh = request.args.get('refresh', '').lower() in ('1', 'true', 'yes')
+        if refresh:
+            report = generate_and_save_report(years=5)
+        else:
+            report = load_report()
+            if not report:
+                report = generate_and_save_report(years=5)
+        return jsonify(report)
+    except Exception as e:
+        logger.exception("Backtest report failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
 @app.route('/api/holdings')
@@ -2858,7 +3143,7 @@ def get_holdings():
             
             # If still None, try extracting from instrument_key
             if not symbol or symbol == 'N/A':
-                instrument_key = h.get('instrument_key') or h.get('instrumentKey') or ''
+                instrument_key = h.get('instrument_key') or h.get('instrumentKey') or h.get('instrument_token') or ''
                 if instrument_key:
                     # Format: "NSE_EQ|INE467B01029" or "NSE_EQ|FSL" or just "FSL"
                     parts = str(instrument_key).split('|')
@@ -2889,8 +3174,15 @@ def get_holdings():
             
             logger.debug(f"[Holdings] Extracted symbol: {symbol} from holding: {list(h.keys())}")
             
+            # Extract ticker and instrument_key for signals API and WebSocket streaming
+            ticker, inst_key = _holding_to_ticker_and_key(h)
+            if not ticker:
+                ticker = f"{symbol}.NS" if '.' not in str(symbol) else symbol
+            
             formatted.append({
                 'symbol': symbol,
+                'ticker': ticker,
+                'instrument_key': inst_key,
                 'qty': quantity,
                 'avg_price': avg_price,
                 'ltp': last_price,
@@ -2902,6 +3194,30 @@ def get_holdings():
             })
         
         logger.info(f"[Holdings] Returning {len(formatted)} formatted holdings")
+        # Pre-compute signals for holdings in background (with instrument_key from instrument_token)
+        try:
+            from src.web.signal_precompute import precompute_holdings_background
+            from flask import current_app
+            precompute_holdings_background(formatted, app=current_app._get_current_object())
+        except Exception as pre_err:
+            logger.debug(f"[Holdings] Precompute holdings skipped: {pre_err}")
+        # Warm instrument_key cache for holdings + watchlist (speeds up place_order)
+        try:
+            import threading
+            from src.web.instrument_master import get_instrument_master
+            tickers_to_warm = list({h.get('ticker') for h in formatted if h.get('ticker')})
+            wl = watchlist_manager.get_watchlist()
+            tickers_to_warm.extend([t for t in (wl or []) if t and t not in tickers_to_warm])
+            def _warm():
+                im = get_instrument_master()
+                for t in tickers_to_warm[:50]:
+                    try:
+                        im.get_instrument_key(t)
+                    except Exception:
+                        pass
+            threading.Thread(target=_warm, daemon=True).start()
+        except Exception as warm_err:
+            logger.debug(f"[Holdings] Instrument cache warm skipped: {warm_err}")
         return jsonify(formatted)
     except Exception as e:
         logger.error(f"[Holdings] Error fetching holdings: {e}")

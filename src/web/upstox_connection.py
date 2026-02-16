@@ -177,3 +177,8 @@ class UpstoxConnectionManager:
 
 # Global instance
 connection_manager = UpstoxConnectionManager()
+
+
+def get_upstox_connection() -> UpstoxConnectionManager:
+    """Alias for connection_manager (used by auto-trading)."""
+    return connection_manager

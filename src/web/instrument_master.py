@@ -96,6 +96,7 @@ TICKER_MAP = {
     'HDFC.NS': 'NSE_EQ|INE040A01034',  # HDFC Bank
     'HDCF': 'NSE_EQ|INE040A01034',  # Common typo/variation
     # Demat holdings (expanded for signal generation)
+    'ACCELYA.NS': 'NSE_EQ|INE793A01012',  # Accelya Solutions India
     'IREDA.NS': 'NSE_EQ|INE202E01016',  # Indian Renewable Energy Development Agency
     'NTPCGREEN.NS': 'NSE_EQ|INE0ONG01011',  # NTPC Green Energy (from Upstox)
     'TEXRAIL.NS': 'NSE_EQ|INE778L01019',  # Texmaco Rail & Engineering

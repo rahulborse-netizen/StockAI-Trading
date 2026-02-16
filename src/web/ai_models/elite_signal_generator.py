@@ -159,7 +159,7 @@ class EliteSignalGenerator:
                 hist_data, _, data_hint = get_data_source_manager().get_historical_data(
                     ticker, start_date, end_date, instrument_key_override=instrument_key_override
                 )
-                if hist_data and len(hist_data) >= 50:
+                if hist_data and len(hist_data) >= 30:
                     df = pd.DataFrame(hist_data)
                     df['date'] = pd.to_datetime(df['date'])
                     df = df.set_index('date').sort_index()
@@ -205,8 +205,17 @@ class EliteSignalGenerator:
             labeled_df = add_label_forward_return_up(feat_df, days=1, threshold=0.0)
             ml_df = clean_ml_frame(labeled_df, feature_cols=feature_cols, label_col="label_up")
             
-            if len(ml_df) < 100:
-                return {'error': 'Insufficient data for ELITE analysis', 'ticker': ticker, 'hint': 'Need at least 100 days of data.'}
+            MIN_DAYS = 30  # Reduced for demat holdings (newer listings like IREDA, NTPCGREEN)
+            if len(ml_df) < MIN_DAYS:
+                days_available = len(ml_df)
+                days_needed = max(0, MIN_DAYS - days_available)
+                return {
+                    'error': 'Insufficient data for ELITE analysis',
+                    'ticker': ticker,
+                    'hint': f'Need at least {MIN_DAYS} days of data. Connect Upstox for live demat data.',
+                    'days_available': days_available,
+                    'days_needed': days_needed,
+                }
             
             # Prepare data
             train_df = ml_df.iloc[:-1].copy()
@@ -259,7 +268,7 @@ class EliteSignalGenerator:
             
             # 3. LSTM (if available and enough data)
             try:
-                if TENSORFLOW_AVAILABLE and len(train_df) >= 100:
+                if TENSORFLOW_AVAILABLE and len(train_df) >= 60:
                     lstm_model = LSTMPredictor(sequence_length=60, epochs=20)
                     X_train_vals = train_df[feature_cols].fillna(0)
                     y_train_vals = train_df['label_up']
@@ -335,6 +344,8 @@ class EliteSignalGenerator:
                 target_1 = current_price * 1.02
                 target_2 = current_price * 1.025
             
+            # Flag when using shorter history (60-99 days) so UI can show a notice
+            limited_history = 60 <= len(ml_df) < 100
             # Build response
             signal_response = {
                 'ticker': ticker,
@@ -353,7 +364,9 @@ class EliteSignalGenerator:
                 'ensemble_method': 'weighted_average' if use_ensemble else 'single_model',
                 'model_count': len(predictions),
                 'timestamp': datetime.now().isoformat(),
-                'elite_system': True
+                'elite_system': True,
+                'limited_history': limited_history,
+                'days_used': len(ml_df),
             }
             
             # Add multi-timeframe analysis if enabled
@@ -456,8 +469,8 @@ class EliteSignalGenerator:
                     'timeframe': timeframe
                 }
             
-            # Check minimum data requirement (at least 100 bars for reliable signals)
-            min_bars = 100
+            # Check minimum data requirement (at least 60 bars for reliable signals; aligned with daily MIN_DAYS)
+            min_bars = 60
             if len(ohlcv.df) < min_bars:
                 return {
                     'error': f'Insufficient data for {timeframe} analysis. Got {len(ohlcv.df)} bars, need at least {min_bars}',

@@ -11,25 +11,6 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
-def _get_yahoo_session(verify_ssl: bool = True):
-    """Get requests session for yfinance - SSL workaround for Windows curl 60."""
-    try:
-        import requests
-        s = requests.Session()
-        if verify_ssl:
-            try:
-                import certifi
-                s.verify = certifi.where()
-            except ImportError:
-                pass
-        else:
-            s.verify = False
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        return s
-    except Exception:
-        return None
-
 # Map index names to Yahoo tickers - never append .NS to these
 _YAHOO_INDEX_MAP = {
     'nifty': '^NSEI',
@@ -162,7 +143,7 @@ class DataSourceManager:
                         return quote, DataSource.NSE
                 
                 elif source == DataSource.UPSTOX:
-                    # Try Upstox Market Data API (lazy client - needs request context)
+                    # Live market data from Upstox when connected (prioritized over Yahoo)
                     upstox_client = self._get_upstox_client()
                     if not upstox_client or not upstox_client.access_token:
                         continue
@@ -184,8 +165,7 @@ class DataSourceManager:
                 
                 elif source == DataSource.YAHOO_FINANCE:
                     ticker = _yahoo_ticker(symbol)
-                    session = _get_yahoo_session()
-                    stock = client.Ticker(ticker, session=session) if session else client.Ticker(ticker)
+                    stock = client.Ticker(ticker)
                     hist = stock.history(period="1d", interval="1m")
                     if hist is None or hist.empty:
                         continue
@@ -296,8 +276,7 @@ class DataSourceManager:
                     
                     ticker = ticker_map.get(index_name.lower())
                     if ticker:
-                        session = _get_yahoo_session()
-                        stock = client.Ticker(ticker, session=session) if session else client.Ticker(ticker)
+                        stock = client.Ticker(ticker)
                         hist = stock.history(period="2d", interval="1d")
                         
                         if not hist.empty and len(hist) >= 1:
@@ -421,8 +400,7 @@ class DataSourceManager:
                 
                 elif source == DataSource.YAHOO_FINANCE:
                     ticker = _yahoo_ticker(symbol)
-                    session = _get_yahoo_session()
-                    stock = client.Ticker(ticker, session=session) if session else client.Ticker(ticker)
+                    stock = client.Ticker(ticker)
                     hist = stock.history(start=start_date, end=end_date)
                     
                     if not hist.empty:

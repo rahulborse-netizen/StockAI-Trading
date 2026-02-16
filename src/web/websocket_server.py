@@ -319,6 +319,20 @@ class UpstoxWebSocketManager:
 _ws_manager = None
 _ws_lock = threading.Lock()
 
+# instrument_key -> ticker mapping (for including ticker in price_update broadcast)
+_key_to_ticker: Dict[str, str] = {}
+
+
+def update_key_to_ticker_map(ticker_to_key: dict):
+    """Update instrument_key -> ticker mapping (called from start_stream)."""
+    global _key_to_ticker
+    _key_to_ticker = {v: k for k, v in (ticker_to_key or {}).items()}
+
+
+def get_ticker_for_key(instrument_key: str) -> Optional[str]:
+    """Get ticker for instrument_key from the mapping."""
+    return _key_to_ticker.get(instrument_key)
+
 
 def get_websocket_manager() -> UpstoxWebSocketManager:
     """Get global WebSocket manager instance (singleton)"""
@@ -372,10 +386,13 @@ def init_websocket_handlers(socketio_instance):
         """Broadcast price update to all connected Socket.IO clients"""
         if _socketio_instance:
             try:
-                _socketio_instance.emit('price_update', {
+                ticker = get_ticker_for_key(instrument_key)
+                payload = {
                     'instrument_key': instrument_key,
-                    'price_data': price_data
-                }, broadcast=True)
+                    'price_data': price_data,
+                    'ticker': ticker
+                }
+                _socketio_instance.emit('price_update', payload, broadcast=True)
             except Exception as e:
                 logger.error(f"Error broadcasting price update: {e}")
     

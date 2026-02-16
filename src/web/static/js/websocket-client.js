@@ -211,20 +211,19 @@ class MarketDataWebSocket {
      */
     _handlePriceUpdate(data) {
         try {
-            const { instrument_key, data: priceData } = data;
-            
-            // Log price update (can be disabled for performance)
-            // console.log(`💹 Price update: ${instrument_key}`, priceData);
+            const instrument_key = data.instrument_key;
+            const priceData = data.price_data || data.data || {};
+            const ticker = data.ticker || null;
 
             // Call specific callback if registered
-            if (this.priceCallbacks.has(instrument_key)) {
+            if (instrument_key && this.priceCallbacks.has(instrument_key)) {
                 const callback = this.priceCallbacks.get(instrument_key);
                 callback(instrument_key, priceData);
             }
 
-            // Trigger global price update event
+            // Trigger global price update event (used by dashboard)
             const event = new CustomEvent('priceUpdate', {
-                detail: { instrument_key, priceData }
+                detail: { instrument_key, priceData, ticker }
             });
             window.dispatchEvent(event);
 

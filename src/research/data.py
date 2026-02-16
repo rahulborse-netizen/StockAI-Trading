@@ -360,28 +360,12 @@ def download_yahoo_ohlcv(
             logger.warning(f"Failed to load cache for {ticker}: {e}. Re-downloading...")
 
     import yfinance as yf
-    import requests
 
-    # SSL workaround: use requests session with certifi CA bundle (fixes curl 60 on Windows)
-    def _ssl_session(verify_ssl: bool = True):
-        s = requests.Session()
-        if verify_ssl:
-            try:
-                import certifi
-                s.verify = certifi.where()
-            except ImportError:
-                pass
-        else:
-            s.verify = False
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        return s
-
+    # Do NOT pass session= to yf.download - yfinance requires curl_cffi, not requests.Session.
+    # Let yfinance use its default. Set SSL env vars (certifi) before import if needed for Windows.
     last_err: Exception | None = None
-    use_insecure_fallback = False
     for attempt in range(1, retries + 1):
         try:
-            session = _ssl_session(verify_ssl=not use_insecure_fallback)
             logger.info(f"Downloading {ticker} (attempt {attempt}/{retries})...")
             df = yf.download(
                 tickers=ticker,
@@ -392,7 +376,6 @@ def download_yahoo_ohlcv(
                 progress=False,
                 threads=False,
                 group_by="column",
-                session=session,
             )
             
             if df is not None and not df.empty:
@@ -410,12 +393,6 @@ def download_yahoo_ohlcv(
             logger.warning(
                 f"Attempt {attempt}/{retries} failed for {ticker}: {error_msg}"
             )
-            # On SSL/certificate error, try insecure fallback on next attempt (Windows workaround)
-            if "certificate" in error_msg.lower() or "ssl" in error_msg.lower() or "curl" in error_msg.lower():
-                logger.warning("SSL/certificate issue detected. Will retry with verify=False fallback.")
-                use_insecure_fallback = True
-            elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-                logger.warning("Network/connection issue detected. Will retry...")
         
         # Exponential backoff: sleep longer on each retry
         if attempt < retries:
