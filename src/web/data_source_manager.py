@@ -357,7 +357,6 @@ class DataSourceManager:
             index_name = index_map.get(symbol.upper() if not symbol.startswith('^') else symbol, symbol.lower().replace('^', ''))
             
             # Try Upstox index data first
-            upstox_client = self._get_upstox_client()
             if upstox_client and upstox_client.access_token:
                 try:
                     index_data, source = self.get_index_data(index_name)
@@ -400,8 +399,8 @@ class DataSourceManager:
                                     if records:
                                         logger.info(f"✅ Got {len(records)} historical candles for {symbol} (index) from Upstox (LIVE DATA)")
                                         return records, DataSource.UPSTOX, None
-            except Exception as e:
-                logger.debug(f"Upstox index historical failed for {symbol}: {e}")
+                except Exception as e:
+                    logger.debug(f"Upstox index historical failed for {symbol}: {e}")
         
         # Try Upstox for stocks (when connected) - no SSL/blocking issues, no rate limits
         if upstox_client and upstox_client.access_token:

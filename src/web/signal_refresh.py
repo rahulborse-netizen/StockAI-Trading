@@ -82,6 +82,8 @@ class SignalRefreshService:
             
             generator = get_elite_signal_generator()
             refreshed = 0
+            failed = 0
+            rate_limited = 0
             
             for ticker in tickers:
                 if not self.running:
@@ -99,15 +101,33 @@ class SignalRefreshService:
                         set_cached_signal(ticker, result)
                         refreshed += 1
                         
-                        # Small delay to avoid rate limits
-                        if not priority:
-                            time.sleep(2)
+                        # Adaptive delay based on priority and rate limits
+                        delay = 1.0 if priority else 3.0
+                        time.sleep(delay)
+                    else:
+                        failed += 1
+                        error_msg = str(result.get('error', 'unknown')) if result else 'no result'
+                        if 'rate limit' in error_msg.lower():
+                            rate_limited += 1
+                            # Longer delay on rate limit
+                            time.sleep(5.0)
+                        else:
+                            time.sleep(1.0)
+                            
                 except Exception as e:
-                    logger.debug(f"[SignalRefresh] Failed to refresh {ticker}: {e}")
-                    if not priority:
-                        time.sleep(1)  # Shorter delay on error
+                    failed += 1
+                    error_msg = str(e).lower()
+                    if 'rate limit' in error_msg:
+                        rate_limited += 1
+                        logger.debug(f"[SignalRefresh] Rate limited for {ticker}, waiting...")
+                        time.sleep(5.0)  # Wait longer on rate limit
+                    else:
+                        logger.debug(f"[SignalRefresh] Failed to refresh {ticker}: {e}")
+                        time.sleep(1.0)
             
-            logger.info(f"[SignalRefresh] ✅ Refreshed {refreshed}/{len(tickers)} signals")
+            if rate_limited > 0:
+                logger.warning(f"[SignalRefresh] ⚠️ Rate limited for {rate_limited} signals. Consider connecting Upstox for unlimited data.")
+            logger.info(f"[SignalRefresh] ✅ Refreshed {refreshed}/{len(tickers)} signals ({failed} failed, {rate_limited} rate limited)")
             
         except Exception as e:
             logger.error(f"[SignalRefresh] Error refreshing signals: {e}", exc_info=True)

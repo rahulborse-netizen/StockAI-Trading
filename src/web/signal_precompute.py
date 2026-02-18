@@ -68,7 +68,20 @@ def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: i
         start_time = time.time()
         
         # Check if Upstox is connected (prioritize live data)
-        upstox_connected = connection_manager.is_connected()
+        # Use app context to check Upstox connection status safely
+        upstox_connected = False
+        try:
+            if app:
+                with app.app_context():
+                    try:
+                        upstox_connected = connection_manager.is_connected()
+                    except (RuntimeError, AttributeError):
+                        # Flask session not available in background thread - this is OK
+                        pass
+        except Exception:
+            # If app context fails, assume Upstox not connected
+            pass
+        
         if upstox_connected:
             logger.info("[Precompute] Upstox connected - using live data (faster, no rate limits)")
             # Can use more workers when Upstox is connected (no rate limits)
@@ -109,6 +122,7 @@ def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: i
             
             # Process completed tasks as they finish
             completed = 0
+            rate_limited_count = 0
             for future in as_completed(future_to_ticker):
                 completed += 1
                 ticker = future_to_ticker[future]
@@ -119,13 +133,27 @@ def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: i
                         logger.info(f"[Precompute] {result['ticker']}: {result['signal']} ({completed}/{len(tickers_to_compute)})")
                     else:
                         failed += 1
-                        error_msg = result.get('error', 'error')
-                        # Don't log rate limit errors as warnings (expected)
-                        if 'rate limit' not in str(error_msg).lower():
-                            logger.debug(f"[Precompute] {result['ticker']}: skip ({error_msg})")
+                        error_msg = str(result.get('error', 'error')).lower()
+                        # Track rate limits separately
+                        if 'rate limit' in error_msg:
+                            rate_limited_count += 1
+                            # Don't log rate limit errors as warnings (expected when Upstox not connected)
+                            logger.debug(f"[Precompute] {result['ticker']}: rate limited (expected without Upstox)")
+                        elif 'insufficient data' in error_msg:
+                            logger.debug(f"[Precompute] {result['ticker']}: insufficient data")
+                        else:
+                            logger.debug(f"[Precompute] {result['ticker']}: skip ({result.get('error', 'error')})")
                 except Exception as e:
                     failed += 1
-                    logger.debug(f"[Precompute] {ticker}: {e}")
+                    error_msg = str(e).lower()
+                    if 'rate limit' in error_msg:
+                        rate_limited_count += 1
+                        logger.debug(f"[Precompute] {ticker}: rate limited")
+                    else:
+                        logger.debug(f"[Precompute] {ticker}: {e}")
+            
+            if rate_limited_count > 0:
+                logger.info(f"[Precompute] ⚠️ {rate_limited_count} signals rate limited by Yahoo Finance. Connect Upstox for unlimited data access.")
 
         elapsed = time.time() - start_time
         _precompute_done = True

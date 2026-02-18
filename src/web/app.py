@@ -198,14 +198,6 @@ def handle_exception(e):
         return jsonify({'status': 'error', 'message': str(e)}), 500
     raise e
 
-# Error handlers are defined above with Sentry integration - duplicates removed
-        return jsonify({
-            'status': 'error',
-            'message': f'Server error: {str(error)}',
-            'error_type': type(error).__name__
-        }), 500
-    raise error  # Re-raise for non-API routes to use default Flask handler
-
 DEFAULT_FEATURE_COLS = [
     "ret_1", "ret_5", "vol_10", "sma_10", "sma_50", "ema_20",
     "rsi_14", "macd", "macd_signal", "macd_hist",

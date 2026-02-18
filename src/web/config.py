@@ -65,10 +65,6 @@ class ProductionConfig(Config):
     DEBUG = False
     TESTING = False
     SESSION_COOKIE_SECURE = True
-    
-    # Production-specific settings
-    if not Config.SECRET_KEY or Config.SECRET_KEY == 'dev-secret-change-me-in-production':
-        raise ValueError("FLASK_SECRET_KEY must be set in production")
 
 class TestingConfig(Config):
     """Testing configuration"""
@@ -81,6 +77,10 @@ def get_config() -> Config:
     env = os.getenv('FLASK_ENV', 'development').lower()
     
     if env == 'production':
+        # Validate production settings
+        secret_key = os.getenv('FLASK_SECRET_KEY', '')
+        if not secret_key or secret_key == 'dev-secret-change-me-in-production':
+            raise ValueError("FLASK_SECRET_KEY must be set in production environment")
         return ProductionConfig()
     elif env == 'testing':
         return TestingConfig()
