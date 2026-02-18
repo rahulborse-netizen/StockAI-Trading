@@ -1561,8 +1561,40 @@ async function showIndexSignals() {
                     const name = signal.index_name || signal.ticker.replace('^', '').replace('.NS', '').replace('.BO', '');
                     const icon = (signal.signal === 'BUY' || signal.signal === 'STRONG_BUY') ? 'fa-arrow-up' : (signal.signal === 'SELL' || signal.signal === 'STRONG_SELL') ? 'fa-arrow-down' : 'fa-pause';
                     const spot = (signal.current_price || 0).toLocaleString('en-IN', fmt);
-                    const strikeBlock = strike > 0 ? '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Strike (ATM):</span><span style="color: var(--primary-color); font-weight: 600;">' + strike.toLocaleString('en-IN') + (signal.option_type ? ' (' + signal.option_label + ')' : '') + '</span></div>' : '';
-                    const levelsBlock = hasLevels && signal.signal !== 'HOLD' ? '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Where to buy / Entry:</span><span style="color: var(--text-primary); font-weight: 600;">' + entryPrice.toLocaleString('en-IN', fmt) + '</span></div><div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Stop loss:</span><span style="color: #ef4444; font-weight: 600;">' + (signal.stop_loss || 0).toLocaleString('en-IN', fmt) + '</span></div><div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Target 1:</span><span style="color: #10b981; font-weight: 600;">' + (signal.target_1 || 0).toLocaleString('en-IN', fmt) + '</span></div>' + ((signal.target_2 > 0) ? '<div style="display: flex; justify-content: space-between;"><span style="color: var(--text-muted); font-size: 0.875rem;">Target 2:</span><span style="color: #10b981;">' + (signal.target_2 || 0).toLocaleString('en-IN', fmt) + '</span></div>' : '') : '';
+                    // Strike price and premium information
+                    const strikeDetails = signal.strike_details || {};
+                    const currentPremium = strikeDetails.current_premium || signal.strike_premium_current || 0;
+                    const entryPremium = strikeDetails.entry_premium || signal.strike_premium_entry || 0;
+                    const target1Premium = strikeDetails.target_1_premium || signal.strike_premium_target_1 || 0;
+                    const target2Premium = strikeDetails.target_2_premium || signal.strike_premium_target_2 || 0;
+                    
+                    let strikeBlock = '';
+                    if (strike > 0) {
+                        strikeBlock = '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Strike (ATM):</span><span style="color: var(--primary-color); font-weight: 600;">' + strike.toLocaleString('en-IN') + (signal.option_type ? ' (' + signal.option_label + ')' : '') + '</span></div>';
+                        
+                        // Add premium prices if available
+                        if (currentPremium > 0) {
+                            strikeBlock += '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);"><span style="color: var(--text-muted); font-size: 0.875rem;">Premium (Live Market):</span><span style="color: var(--primary-color); font-weight: 600;">₹' + currentPremium.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</span></div>';
+                        }
+                        if (entryPremium > 0) {
+                            strikeBlock += '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Premium (Entry / Buy):</span><span style="color: #3b82f6; font-weight: 600;">₹' + entryPremium.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</span></div>';
+                        }
+                    }
+                    
+                    let levelsBlock = '';
+                    if (hasLevels && signal.signal !== 'HOLD') {
+                        levelsBlock = '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Where to buy / Entry:</span><span style="color: var(--text-primary); font-weight: 600;">' + entryPrice.toLocaleString('en-IN', fmt) + '</span></div>';
+                        
+                        // Add premium sell targets if available
+                        if (target1Premium > 0) {
+                            levelsBlock += '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Premium (Sell Target 1):</span><span style="color: #10b981; font-weight: 600;">₹' + target1Premium.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</span></div>';
+                        }
+                        if (target2Premium > 0) {
+                            levelsBlock += '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Premium (Sell Target 2):</span><span style="color: #10b981; font-weight: 600;">₹' + target2Premium.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</span></div>';
+                        }
+                        
+                        levelsBlock += '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Stop loss:</span><span style="color: #ef4444; font-weight: 600;">' + (signal.stop_loss || 0).toLocaleString('en-IN', fmt) + '</span></div><div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Target 1:</span><span style="color: #10b981; font-weight: 600;">' + (signal.target_1 || 0).toLocaleString('en-IN', fmt) + '</span></div>' + ((signal.target_2 > 0) ? '<div style="display: flex; justify-content: space-between;"><span style="color: var(--text-muted); font-size: 0.875rem;">Target 2:</span><span style="color: #10b981;">' + (signal.target_2 || 0).toLocaleString('en-IN', fmt) + '</span></div>' : '');
+                    }
                     const holdMsg = (!hasLevels && signal.signal === 'HOLD') ? '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>' : '';
                     const optionBlock = signal.option_action ? '<div style="font-size: 0.8rem; color: var(--primary-color); margin-bottom: 0.5rem;"><i class="fas fa-info-circle"></i> ' + signal.option_action + '</div>' : '';
                     return '<div class="signal-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem;">' +
