@@ -4603,6 +4603,395 @@ def record_portfolio_snapshot():
         logger.error(f"Error recording portfolio snapshot: {e}")
         return jsonify({'error': str(e)}), 500
 
+# ============================================================================
+# Phase 3.3: Portfolio Optimization API Endpoints
+# ============================================================================
+
+@app.route('/api/portfolio/optimize/mpt', methods=['POST'])
+def optimize_portfolio_mpt():
+    """Phase 3.3: Optimize portfolio using Modern Portfolio Theory (MPT)"""
+    try:
+        data = request.json
+        assets = data.get('assets', [])  # List of {ticker, expected_return, volatility, current_price, quantity}
+        target_return = data.get('target_return')
+        risk_free_rate = data.get('risk_free_rate', 0.06)
+        max_weight = data.get('max_weight', 1.0)
+        min_weight = data.get('min_weight', 0.0)
+        
+        if not assets or len(assets) < 2:
+            return jsonify({'status': 'error', 'error': 'At least 2 assets required'}), 400
+        
+        # Extract data
+        tickers = [a['ticker'] for a in assets]
+        expected_returns = np.array([a.get('expected_return', 0.1) for a in assets])
+        
+        # Build covariance matrix from volatilities and correlations
+        volatilities = np.array([a.get('volatility', 0.2) for a in assets])
+        correlation = data.get('correlation', 0.3)  # Default correlation
+        covariance_matrix = np.outer(volatilities, volatilities) * correlation
+        np.fill_diagonal(covariance_matrix, volatilities ** 2)
+        
+        from src.web.portfolio_optimization import get_mpt_optimizer
+        optimizer = get_mpt_optimizer(risk_free_rate=risk_free_rate)
+        
+        result = optimizer.optimize_portfolio(
+            expected_returns=expected_returns,
+            covariance_matrix=covariance_matrix,
+            target_return=target_return,
+            max_weight=max_weight,
+            min_weight=min_weight
+        )
+        
+        # Map weights to tickers
+        optimal_weights_dict = {}
+        for i, ticker in enumerate(tickers):
+            weight_key = f"Asset_{i}"
+            if weight_key in result.optimal_weights:
+                optimal_weights_dict[ticker] = result.optimal_weights[weight_key]
+        
+        return jsonify({
+            'status': 'success',
+            'method': result.method,
+            'optimal_weights': optimal_weights_dict,
+            'expected_return': result.expected_return,
+            'volatility': result.volatility,
+            'sharpe_ratio': result.sharpe_ratio,
+            'constraints_satisfied': result.constraints_satisfied,
+            'details': result.optimization_details
+        })
+    except Exception as e:
+        logger.exception("MPT optimization failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/optimize/risk-parity', methods=['POST'])
+def optimize_portfolio_risk_parity():
+    """Phase 3.3: Optimize portfolio using Risk Parity"""
+    try:
+        data = request.json
+        assets = data.get('assets', [])
+        max_weight = data.get('max_weight', 1.0)
+        min_weight = data.get('min_weight', 0.0)
+        
+        if not assets or len(assets) < 2:
+            return jsonify({'status': 'error', 'error': 'At least 2 assets required'}), 400
+        
+        # Build covariance matrix
+        volatilities = np.array([a.get('volatility', 0.2) for a in assets])
+        correlation = data.get('correlation', 0.3)
+        covariance_matrix = np.outer(volatilities, volatilities) * correlation
+        np.fill_diagonal(covariance_matrix, volatilities ** 2)
+        
+        from src.web.portfolio_optimization import get_risk_parity_optimizer
+        optimizer = get_risk_parity_optimizer()
+        
+        result = optimizer.optimize_portfolio(
+            covariance_matrix=covariance_matrix,
+            max_weight=max_weight,
+            min_weight=min_weight
+        )
+        
+        # Map weights to tickers
+        tickers = [a['ticker'] for a in assets]
+        optimal_weights_dict = {}
+        for i, ticker in enumerate(tickers):
+            weight_key = f"Asset_{i}"
+            if weight_key in result.optimal_weights:
+                optimal_weights_dict[ticker] = result.optimal_weights[weight_key]
+        
+        return jsonify({
+            'status': 'success',
+            'method': result.method,
+            'optimal_weights': optimal_weights_dict,
+            'volatility': result.volatility,
+            'constraints_satisfied': result.constraints_satisfied,
+            'details': result.optimization_details
+        })
+    except Exception as e:
+        logger.exception("Risk parity optimization failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/optimize/black-litterman', methods=['POST'])
+def optimize_portfolio_black_litterman():
+    """Phase 3.3: Optimize portfolio using Black-Litterman model"""
+    try:
+        data = request.json
+        assets = data.get('assets', [])
+        market_caps = data.get('market_caps', [])  # Market cap weights
+        views = data.get('views', {})  # {ticker_index: expected_return}
+        view_confidences = data.get('view_confidences', {})
+        risk_free_rate = data.get('risk_free_rate', 0.06)
+        tau = data.get('tau', 0.05)
+        risk_aversion = data.get('risk_aversion', 3.0)
+        
+        if not assets or len(assets) < 2:
+            return jsonify({'status': 'error', 'error': 'At least 2 assets required'}), 400
+        
+        # Build covariance matrix
+        volatilities = np.array([a.get('volatility', 0.2) for a in assets])
+        correlation = data.get('correlation', 0.3)
+        covariance_matrix = np.outer(volatilities, volatilities) * correlation
+        np.fill_diagonal(covariance_matrix, volatilities ** 2)
+        
+        # Market cap weights (default to equal if not provided)
+        if not market_caps or len(market_caps) != len(assets):
+            market_caps_array = np.ones(len(assets)) / len(assets)
+        else:
+            market_caps_array = np.array(market_caps)
+            market_caps_array = market_caps_array / np.sum(market_caps_array)  # Normalize
+        
+        # Convert views from ticker indices to asset indices
+        views_dict = {}
+        tickers = [a['ticker'] for a in assets]
+        for ticker_idx_str, view_return in views.items():
+            try:
+                asset_idx = int(ticker_idx_str)
+                if 0 <= asset_idx < len(assets):
+                    views_dict[asset_idx] = view_return
+            except ValueError:
+                # Try to find by ticker
+                if ticker_idx_str in tickers:
+                    asset_idx = tickers.index(ticker_idx_str)
+                    views_dict[asset_idx] = view_return
+        
+        from src.web.portfolio_optimization import get_black_litterman_optimizer
+        optimizer = get_black_litterman_optimizer(risk_free_rate=risk_free_rate, tau=tau)
+        
+        result = optimizer.optimize_portfolio(
+            market_caps=market_caps_array,
+            covariance_matrix=covariance_matrix,
+            views=views_dict if views_dict else None,
+            view_confidences=view_confidences if view_confidences else None,
+            risk_aversion=risk_aversion
+        )
+        
+        # Map weights to tickers
+        optimal_weights_dict = {}
+        for i, ticker in enumerate(tickers):
+            weight_key = f"Asset_{i}"
+            if weight_key in result.optimal_weights:
+                optimal_weights_dict[ticker] = result.optimal_weights[weight_key]
+        
+        return jsonify({
+            'status': 'success',
+            'method': result.method,
+            'optimal_weights': optimal_weights_dict,
+            'expected_return': result.expected_return,
+            'volatility': result.volatility,
+            'sharpe_ratio': result.sharpe_ratio,
+            'constraints_satisfied': result.constraints_satisfied,
+            'details': result.optimization_details
+        })
+    except Exception as e:
+        logger.exception("Black-Litterman optimization failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/risk/var', methods=['POST'])
+def calculate_var():
+    """Phase 3.3: Calculate Value at Risk (VaR)"""
+    try:
+        data = request.json
+        portfolio_returns = data.get('portfolio_returns', [])  # Historical returns
+        portfolio_value = float(data.get('portfolio_value', 100000))
+        confidence_level = float(data.get('confidence_level', 0.95))
+        method = data.get('method', 'historical')
+        
+        if not portfolio_returns:
+            return jsonify({'status': 'error', 'error': 'portfolio_returns required'}), 400
+        
+        returns_array = np.array(portfolio_returns)
+        
+        from src.web.portfolio_optimization import get_risk_analytics
+        analytics = get_risk_analytics(confidence_level=confidence_level)
+        
+        var_result = analytics.calculate_var(returns_array, portfolio_value, method=method)
+        
+        return jsonify({
+            'status': 'success',
+            'var': var_result
+        })
+    except Exception as e:
+        logger.exception("VaR calculation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/risk/cvar', methods=['POST'])
+def calculate_cvar():
+    """Phase 3.3: Calculate Conditional Value at Risk (CVaR)"""
+    try:
+        data = request.json
+        portfolio_returns = data.get('portfolio_returns', [])
+        portfolio_value = float(data.get('portfolio_value', 100000))
+        confidence_level = float(data.get('confidence_level', 0.95))
+        
+        if not portfolio_returns:
+            return jsonify({'status': 'error', 'error': 'portfolio_returns required'}), 400
+        
+        returns_array = np.array(portfolio_returns)
+        
+        from src.web.portfolio_optimization import get_risk_analytics
+        analytics = get_risk_analytics(confidence_level=confidence_level)
+        
+        cvar_result = analytics.calculate_cvar(returns_array, portfolio_value)
+        
+        return jsonify({
+            'status': 'success',
+            'cvar': cvar_result
+        })
+    except Exception as e:
+        logger.exception("CVaR calculation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/risk/stress-test', methods=['POST'])
+def stress_test_portfolio():
+    """Phase 3.3: Stress test portfolio"""
+    try:
+        data = request.json
+        portfolio_weights = data.get('portfolio_weights', {})  # {ticker: weight}
+        assets = data.get('assets', [])  # List with volatility info
+        stress_scenarios = data.get('stress_scenarios', [
+            {'name': 'Market Crash', 'volatility_multiplier': 2.0, 'shock_size': 0.2},
+            {'name': 'Sector Shock', 'volatility_multiplier': 1.5, 'shock_size': 0.15}
+        ])
+        
+        if not portfolio_weights or not assets:
+            return jsonify({'status': 'error', 'error': 'portfolio_weights and assets required'}), 400
+        
+        # Build covariance matrix
+        tickers = [a['ticker'] for a in assets]
+        weights_array = np.array([portfolio_weights.get(t, 0.0) for t in tickers])
+        
+        volatilities = np.array([a.get('volatility', 0.2) for a in assets])
+        correlation = data.get('correlation', 0.3)
+        covariance_matrix = np.outer(volatilities, volatilities) * correlation
+        np.fill_diagonal(covariance_matrix, volatilities ** 2)
+        
+        from src.web.portfolio_optimization import get_risk_analytics
+        analytics = get_risk_analytics()
+        
+        results = analytics.stress_test(weights_array, covariance_matrix, stress_scenarios)
+        
+        return jsonify({
+            'status': 'success',
+            'stress_test_results': results
+        })
+    except Exception as e:
+        logger.exception("Stress test failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/risk/correlation', methods=['POST'])
+def analyze_correlation():
+    """Phase 3.3: Analyze correlation between assets"""
+    try:
+        data = request.json
+        returns_matrix = data.get('returns_matrix', [])  # n_assets x n_periods
+        asset_names = data.get('asset_names', [])
+        
+        if not returns_matrix or not asset_names:
+            return jsonify({'status': 'error', 'error': 'returns_matrix and asset_names required'}), 400
+        
+        returns_array = np.array(returns_matrix)
+        
+        from src.web.portfolio_optimization import get_risk_analytics
+        analytics = get_risk_analytics()
+        
+        correlation_result = analytics.correlation_analysis(returns_array, asset_names)
+        
+        return jsonify({
+            'status': 'success',
+            'correlation_analysis': correlation_result
+        })
+    except Exception as e:
+        logger.exception("Correlation analysis failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/risk/sector-exposure', methods=['POST'])
+def calculate_sector_exposure():
+    """Phase 3.3: Calculate sector exposure"""
+    try:
+        data = request.json
+        portfolio_weights = data.get('portfolio_weights', {})  # {ticker: weight}
+        asset_sectors = data.get('asset_sectors', {})  # {ticker: sector}
+        
+        if not portfolio_weights:
+            return jsonify({'status': 'error', 'error': 'portfolio_weights required'}), 400
+        
+        from src.web.portfolio_optimization import get_risk_analytics
+        analytics = get_risk_analytics()
+        
+        sector_exposure = analytics.sector_exposure(portfolio_weights, asset_sectors)
+        
+        return jsonify({
+            'status': 'success',
+            'sector_exposure': sector_exposure
+        })
+    except Exception as e:
+        logger.exception("Sector exposure calculation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/rebalance/check', methods=['POST'])
+def check_rebalancing():
+    """Phase 3.3: Check if rebalancing is needed"""
+    try:
+        data = request.json
+        current_weights = data.get('current_weights', {})  # {ticker: weight}
+        target_weights = data.get('target_weights', {})  # {ticker: weight}
+        threshold = data.get('threshold', 0.05)
+        
+        if not current_weights or not target_weights:
+            return jsonify({'status': 'error', 'error': 'current_weights and target_weights required'}), 400
+        
+        from src.web.portfolio_optimization import get_rebalancing_strategy
+        strategy = get_rebalancing_strategy(threshold=threshold)
+        
+        result = strategy.check_rebalancing_needed(current_weights, target_weights)
+        
+        return jsonify({
+            'status': 'success',
+            'rebalancing_check': result
+        })
+    except Exception as e:
+        logger.exception("Rebalancing check failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/rebalance/calculate', methods=['POST'])
+def calculate_rebalancing_trades():
+    """Phase 3.3: Calculate trades needed for rebalancing"""
+    try:
+        data = request.json
+        current_weights = data.get('current_weights', {})
+        target_weights = data.get('target_weights', {})
+        portfolio_value = float(data.get('portfolio_value', 100000))
+        current_prices = data.get('current_prices', {})  # {ticker: price}
+        threshold = data.get('threshold', 0.05)
+        
+        if not current_weights or not target_weights or not current_prices:
+            return jsonify({'status': 'error', 'error': 'current_weights, target_weights, and current_prices required'}), 400
+        
+        from src.web.portfolio_optimization import get_rebalancing_strategy
+        strategy = get_rebalancing_strategy(threshold=threshold)
+        
+        trades = strategy.calculate_rebalancing_trades(
+            current_weights, target_weights, portfolio_value, current_prices
+        )
+        
+        return jsonify({
+            'status': 'success',
+            'trades': trades,
+            'total_trades': len(trades)
+        })
+    except Exception as e:
+        logger.exception("Rebalancing calculation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
 @app.route('/api/portfolio/summary', methods=['GET'])
 def get_portfolio_summary():
     """
