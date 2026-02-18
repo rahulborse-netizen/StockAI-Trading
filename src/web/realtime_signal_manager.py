@@ -172,7 +172,10 @@ class RealtimeSignalManager:
         """
         Calculate strike prices for stock options based on current price.
         Uses standard NSE strike intervals (50 for stocks >1000, 25 for stocks 500-1000, 10 for stocks <500)
+        Now includes premium price calculations.
         """
+        from src.web.index_signals import estimate_option_premium, calculate_strike_premiums
+        
         # Determine strike interval based on price
         if current_price >= 1000:
             interval = 50
@@ -184,20 +187,29 @@ class RealtimeSignalManager:
         # Round to nearest strike
         strike_atm = int(round(current_price / interval) * interval)
         
+        # Get volatility and entry/target levels
+        volatility = float(signal.get('volatility', 0.2))
+        entry_level = float(signal.get('entry_level', current_price))
+        target_1 = float(signal.get('target_1', current_price))
+        target_2 = float(signal.get('target_2', current_price))
+        
         # For bullish signals, suggest OTM call (strike above ATM)
         # For bearish signals, suggest OTM put (strike below ATM)
         signal_type = signal.get('signal', 'HOLD')
         if signal_type in ('STRONG_BUY', 'BUY'):
-            strike_ce = strike_atm + interval  # OTM call
+            recommended_strike = strike_atm + interval  # OTM call
+            strike_ce = recommended_strike
             strike_pe = strike_atm  # ATM put for hedging
             option_type = 'CE'
             option_label = f'Call OTM ({strike_ce})'
         elif signal_type in ('STRONG_SELL', 'SELL'):
+            recommended_strike = strike_atm - interval  # OTM put
             strike_ce = strike_atm  # ATM call for hedging
-            strike_pe = strike_atm - interval  # OTM put
+            strike_pe = recommended_strike
             option_type = 'PE'
             option_label = f'Put OTM ({strike_pe})'
         else:
+            recommended_strike = strike_atm
             strike_ce = strike_atm
             strike_pe = strike_atm
             option_type = ''
@@ -209,6 +221,32 @@ class RealtimeSignalManager:
         signal['strike_interval'] = interval
         signal['option_type'] = option_type
         signal['option_label'] = option_label
+        
+        # Calculate premium prices if option type is recommended
+        if option_type:
+            premium_details = calculate_strike_premiums(
+                strike=recommended_strike,
+                current_price=current_price,
+                option_type=option_type,
+                volatility=volatility,
+                entry_level=entry_level,
+                target_1=target_1,
+                target_2=target_2
+            )
+            signal.update(premium_details)
+            
+            # Add strike price details for display
+            signal['strike_details'] = {
+                'strike_price': recommended_strike,
+                'option_type': option_type,
+                'current_premium': premium_details['strike_premium_current'],
+                'entry_premium': premium_details['strike_premium_entry'],
+                'target_1_premium': premium_details['strike_premium_target_1'],
+                'target_2_premium': premium_details['strike_premium_target_2'],
+                'buy_at_premium': premium_details['strike_premium_entry'],  # Where to buy
+                'sell_at_target_1': premium_details['strike_premium_target_1'],  # Where to sell (target 1)
+                'sell_at_target_2': premium_details['strike_premium_target_2'],  # Where to sell (target 2)
+            }
         
         return signal
     
