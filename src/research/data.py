@@ -413,6 +413,12 @@ def download_yahoo_ohlcv(
             logger.warning(f"Failed to load cache for {ticker}: {e}. Re-downloading...")
 
     import yfinance as yf
+    
+    # Try to import YFRateLimitError for direct exception catching
+    try:
+        from yfinance.exceptions import YFRateLimitError
+    except ImportError:
+        YFRateLimitError = None
 
     # Optional: skip SSL verify for corporate proxies (set YFINANCE_INSECURE_SSL=1)
     _session = None
@@ -491,14 +497,27 @@ def download_yahoo_ohlcv(
             else:
                 logger.warning("Attempt %s/%s failed for %s: %s", attempt, retries, ticker, e)
         except Exception as e:  # noqa: BLE001
+            # Check if it's YFRateLimitError first
+            if YFRateLimitError and isinstance(e, YFRateLimitError):
+                _rate_limit_detected = True
+                _yahoo_rate_limit_active = True
+                logger.warning(f"YFRateLimitError caught directly for {ticker}. Will use longer backoff (30s+).")
+                last_err = e
+                df = pd.DataFrame()
+                logger.warning(f"Attempt {attempt}/{retries} failed for {ticker}: {e}")
+            else:
+                # General exception handling
             last_err = e
             df = pd.DataFrame()
             err_str = str(e).lower()
             err_type = type(e).__name__
             err_module = type(e).__module__
             
-            # Detect rate limiting - check exception type, name, and message
-            is_rate_limit = (
+            # Detect rate limiting - check if it's YFRateLimitError directly
+            is_rate_limit = False
+            if YFRateLimitError and isinstance(e, YFRateLimitError):
+                is_rate_limit = True
+            elif (
                 "ratelimit" in err_str or 
                 "rate limit" in err_str or 
                 "too many requests" in err_str or 
@@ -506,7 +525,8 @@ def download_yahoo_ohlcv(
                 "YFRateLimitError" in err_type or
                 "YFRateLimitError" in str(type(e)) or
                 "RateLimitError" in err_type
-            )
+            ):
+                is_rate_limit = True
             
             if is_rate_limit:
                 _rate_limit_detected = True
