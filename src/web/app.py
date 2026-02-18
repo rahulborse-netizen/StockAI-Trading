@@ -1841,6 +1841,256 @@ def get_ws_status():
         logger.error(f"Error getting WebSocket status: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/options/chain/<path:ticker>', methods=['GET'])
+@app.route('/api/v1/options/chain/<path:ticker>', methods=['GET'])
+def get_options_chain(ticker):
+    """
+    Phase 3.1: Get options chain analysis with Greeks.
+    
+    Query params:
+    - volatility: Implied volatility (default: calculated from historical data)
+    - days_to_expiry: Days to expiration (default: 7)
+    - risk_free_rate: Risk-free rate (default: 0.06)
+    """
+    try:
+        from urllib.parse import unquote
+        ticker = unquote(ticker)
+        
+        # Get current price and volatility from signal
+        from src.web.ai_models.elite_signal_generator import get_elite_signal_generator
+        generator = get_elite_signal_generator()
+        
+        # Generate signal to get current price and volatility
+        signal = generator.generate_signal(ticker=ticker, use_ensemble=True)
+        if 'error' in signal:
+            return jsonify({'error': signal['error']}), 400
+        
+        current_price = signal.get('current_price', 0)
+        volatility = float(request.args.get('volatility', signal.get('volatility', 0.2)))
+        days_to_expiry = int(request.args.get('days_to_expiry', 7))
+        risk_free_rate = float(request.args.get('risk_free_rate', 0.06))
+        
+        # TODO: Fetch actual options chain from Upstox API
+        # For now, generate synthetic chain analysis
+        from src.web.options_trading import OptionsChainAnalyzer, OptionsGreeks
+        
+        analyzer = OptionsChainAnalyzer()
+        
+        # Create synthetic options chain (can be replaced with Upstox API call)
+        synthetic_chain = {
+            'call_options': [],
+            'put_options': [],
+        }
+        
+        # Generate strikes around current price
+        if ticker.startswith('^'):
+            # Index strikes (50 or 100 interval)
+            interval = 50 if 'NSEI' in ticker else 100
+        else:
+            # Stock strikes
+            if current_price >= 1000:
+                interval = 50
+            elif current_price >= 500:
+                interval = 25
+            else:
+                interval = 10
+        
+        atm_strike = round(current_price / interval) * interval
+        
+        # Generate call options (strikes above ATM)
+        for i in range(5):
+            strike = atm_strike + (i * interval)
+            greeks = OptionsGreeks.calculate_all_greeks(
+                S=current_price,
+                K=strike,
+                T=days_to_expiry / 365.0,
+                r=risk_free_rate,
+                sigma=volatility,
+                option_type='CE'
+            )
+            synthetic_chain['call_options'].append({
+                'strike': strike,
+                'last_price': greeks.get('delta', 0) * current_price * 0.02,  # Estimated premium
+                'volume': 0,
+                'open_interest': 0,
+                'implied_volatility': volatility,
+                'greeks': greeks,
+            })
+        
+        # Generate put options (strikes below ATM)
+        for i in range(5):
+            strike = atm_strike - (i * interval)
+            if strike <= 0:
+                continue
+            greeks = OptionsGreeks.calculate_all_greeks(
+                S=current_price,
+                K=strike,
+                T=days_to_expiry / 365.0,
+                r=risk_free_rate,
+                sigma=volatility,
+                option_type='PE'
+            )
+            synthetic_chain['put_options'].append({
+                'strike': strike,
+                'last_price': abs(greeks.get('delta', 0)) * current_price * 0.02,  # Estimated premium
+                'volume': 0,
+                'open_interest': 0,
+                'implied_volatility': volatility,
+                'greeks': greeks,
+            })
+        
+        # Analyze chain
+        chain_analysis = analyzer.analyze_chain(
+            synthetic_chain,
+            current_price,
+            volatility,
+            risk_free_rate,
+            days_to_expiry
+        )
+        
+        # Find best strikes
+        strike_recommendations = analyzer.find_best_strikes(
+            chain_analysis,
+            signal.get('signal', 'HOLD')
+        )
+        
+        return jsonify({
+            'ticker': ticker,
+            'current_price': current_price,
+            'chain_analysis': chain_analysis,
+            'strike_recommendations': strike_recommendations,
+            'timestamp': datetime.now().isoformat(),
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting options chain for {ticker}: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/options/greeks', methods=['POST'])
+@app.route('/api/v1/options/greeks', methods=['POST'])
+def calculate_greeks():
+    """
+    Phase 3.1: Calculate options Greeks for a specific option.
+    
+    Request body:
+    {
+        "current_price": 25725.40,
+        "strike": 25750,
+        "days_to_expiry": 7,
+        "volatility": 0.15,
+        "risk_free_rate": 0.06,
+        "option_type": "CE"  // or "PE"
+    }
+    """
+    try:
+        data = request.json or {}
+        
+        current_price = float(data.get('current_price', 0))
+        strike = float(data.get('strike', 0))
+        days_to_expiry = int(data.get('days_to_expiry', 7))
+        volatility = float(data.get('volatility', 0.2))
+        risk_free_rate = float(data.get('risk_free_rate', 0.06))
+        option_type = data.get('option_type', 'CE').upper()
+        
+        if current_price <= 0 or strike <= 0:
+            return jsonify({'error': 'Invalid price or strike'}), 400
+        
+        from src.web.options_trading import OptionsGreeks
+        
+        T = days_to_expiry / 365.0
+        
+        # Calculate all Greeks
+        greeks = OptionsGreeks.calculate_all_greeks(
+            S=current_price,
+            K=strike,
+            T=T,
+            r=risk_free_rate,
+            sigma=volatility,
+            option_type=option_type
+        )
+        
+        # Calculate option price
+        if option_type == 'CE':
+            option_price = OptionsGreeks.black_scholes_call(
+                current_price, strike, T, risk_free_rate, volatility
+            )
+        else:
+            option_price = OptionsGreeks.black_scholes_put(
+                current_price, strike, T, risk_free_rate, volatility
+            )
+        
+        greeks['option_price'] = round(option_price, 2)
+        
+        return jsonify(greeks)
+        
+    except Exception as e:
+        logger.error(f"Error calculating Greeks: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/options/strategy', methods=['POST'])
+@app.route('/api/v1/options/strategy', methods=['POST'])
+def build_options_strategy():
+    """
+    Phase 3.1: Build options trading strategy.
+    
+    Request body:
+    {
+        "strategy_type": "straddle",  // or "strangle", "bull_call_spread", "bear_put_spread"
+        "current_price": 25725.40,
+        "strikes": {...},  // Strategy-specific strikes
+        "premiums": {...}  // Option premiums
+    }
+    """
+    try:
+        data = request.json or {}
+        strategy_type = data.get('strategy_type', '').lower()
+        current_price = float(data.get('current_price', 0))
+        
+        if current_price <= 0:
+            return jsonify({'error': 'Invalid current price'}), 400
+        
+        from src.web.options_trading import OptionsStrategyBuilder
+        
+        if strategy_type == 'straddle':
+            strike = float(data.get('strike', current_price))
+            call_price = float(data.get('call_premium', 0))
+            put_price = float(data.get('put_premium', 0))
+            strategy = OptionsStrategyBuilder.build_straddle(
+                current_price, strike, call_price, put_price
+            )
+        elif strategy_type == 'strangle':
+            call_strike = float(data.get('call_strike', current_price * 1.02))
+            put_strike = float(data.get('put_strike', current_price * 0.98))
+            call_price = float(data.get('call_premium', 0))
+            put_price = float(data.get('put_premium', 0))
+            strategy = OptionsStrategyBuilder.build_strangle(
+                current_price, call_strike, put_strike, call_price, put_price
+            )
+        elif strategy_type == 'bull_call_spread':
+            lower_strike = float(data.get('lower_strike', current_price))
+            higher_strike = float(data.get('higher_strike', current_price * 1.02))
+            lower_call_price = float(data.get('lower_call_premium', 0))
+            higher_call_price = float(data.get('higher_call_premium', 0))
+            strategy = OptionsStrategyBuilder.build_bull_call_spread(
+                current_price, lower_strike, higher_strike, lower_call_price, higher_call_price
+            )
+        elif strategy_type == 'bear_put_spread':
+            higher_strike = float(data.get('higher_strike', current_price))
+            lower_strike = float(data.get('lower_strike', current_price * 0.98))
+            higher_put_price = float(data.get('higher_put_premium', 0))
+            lower_put_price = float(data.get('lower_put_premium', 0))
+            strategy = OptionsStrategyBuilder.build_bear_put_spread(
+                current_price, higher_strike, lower_strike, higher_put_price, lower_put_price
+            )
+        else:
+            return jsonify({'error': f'Unknown strategy type: {strategy_type}'}), 400
+        
+        return jsonify(strategy)
+        
+    except Exception as e:
+        logger.error(f"Error building options strategy: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/market-indices', methods=['GET'])
 def get_market_indices():
     """Get live data for all major Indian stock market indices"""

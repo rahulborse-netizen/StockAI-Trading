@@ -477,36 +477,36 @@ class EliteSignalGenerator:
                 )
                 signal_response['multi_timeframe'] = tf_analysis
             
-                # Add RL agent position management recommendation
-                try:
-                    from src.web.ai_models.rl_agent import get_rl_agent, RL_AVAILABLE
-                    if RL_AVAILABLE:
-                        rl_agent = get_rl_agent()
-                        if rl_agent.is_available():
-                            rl_recommendation = rl_agent.get_position_recommendation(
-                                data=ohlcv.df,
-                                current_price=current_price,
-                                entry_price=entry_level
-                            )
-                            signal_response['rl_recommendation'] = rl_recommendation
-                except Exception as e:
-                    logger.debug(f"RL agent recommendation skipped: {e}")
+            # Add RL agent position management recommendation
+            try:
+                from src.web.ai_models.rl_agent import get_rl_agent, RL_AVAILABLE
+                if RL_AVAILABLE:
+                    rl_agent = get_rl_agent()
+                    if rl_agent.is_available():
+                        rl_recommendation = rl_agent.get_position_recommendation(
+                            data=ohlcv.df,
+                            current_price=current_price,
+                            entry_price=entry_level
+                        )
+                        signal_response['rl_recommendation'] = rl_recommendation
+            except Exception as e:
+                logger.debug(f"RL agent recommendation skipped: {e}")
+            
+            # Phase 3.1: Add options trading signal
+            try:
+                from src.web.options_trading import get_options_signal_generator
+                options_generator = get_options_signal_generator()
                 
-                # Phase 3.1: Add options trading signal
-                try:
-                    from src.web.options_trading import get_options_signal_generator
-                    options_generator = get_options_signal_generator()
-                    
-                    # Generate options signal (options chain can be fetched from Upstox if available)
-                    options_signal = options_generator.generate_options_signal(
-                        ticker=ticker,
-                        underlying_signal=signal_response,
-                        volatility=recent_volatility
-                    )
-                    signal_response['options_signal'] = options_signal
-                    logger.info(f"[ELITE Signal] ✅ Added options signal for {ticker}")
-                except Exception as e:
-                    logger.debug(f"Options signal generation skipped for {ticker}: {e}")
+                # Generate options signal (options chain can be fetched from Upstox if available)
+                options_signal = options_generator.generate_options_signal(
+                    ticker=ticker,
+                    underlying_signal=signal_response,
+                    volatility=recent_volatility
+                )
+                signal_response['options_signal'] = options_signal
+                logger.info(f"[ELITE Signal] ✅ Added options signal for {ticker}")
+            except Exception as e:
+                logger.debug(f"Options signal generation skipped for {ticker}: {e}")
 
             # Agentic: record signal for outcome tracking (learn from errors)
             try:
