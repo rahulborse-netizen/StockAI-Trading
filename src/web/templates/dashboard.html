@@ -482,14 +482,15 @@
                             <span id="signals-precompute-status" class="signals-precompute-badge text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;" title="Pre-computed signals cache">Signals: —/— cached</span>
                             <span id="signals-accuracy-summary" class="text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;" title="Backtest metrics (NIFTY 50)">Win rate: — | Sharpe: — | Max DD: —</span>
                             <span id="signals-last-updated" class="text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;">Last updated: —</span>
+                            <span id="agentic-status-badge" class="text-muted" style="font-size: 0.8rem; margin-right: 1rem; align-self: center;" title="Pending outcomes for AI learning">Agentic: —</span>
                             <button class="btn-modern btn-primary" onclick="loadAllSignals()" style="margin-right: 0.5rem;" title="Load signals for your Demat portfolio (Upstox)">
                                 <i class="fas fa-briefcase"></i> Portfolio Signals
                             </button>
                             <button class="btn-modern btn-secondary" onclick="loadAdaptiveEliteSignals()" style="margin-right: 0.5rem;">
                                 <i class="fas fa-brain"></i> Adaptive Elite
                             </button>
-                            <button class="btn-modern btn-secondary" onclick="showIndexSignals()">
-                                <i class="fas fa-chart-bar"></i> Index Signals
+                            <button class="btn-modern btn-primary" onclick="showIndexSignals()" title="Nifty 50, Bank Nifty, Sensex — strike, entry, stop-loss, reasoning">
+                                <i class="fas fa-chart-bar"></i> Index Trades (Nifty / BN / Sensex)
                             </button>
                             <button class="btn-modern btn-primary" onclick="loadAllStocksSignals()">
                                 <i class="fas fa-database"></i> All Stocks Signals
@@ -503,9 +504,10 @@
                         </div>
                     </div>
                     
-                    <!-- Index Signals Section -->
+                    <!-- Index Signals Section (Nifty, Bank Nifty, Sensex: strike, entry, stop-loss, reasoning) -->
                     <div id="index-signals-section" style="display: none;">
-                        <h4 style="margin: 1rem 0;">Index Trading Signals</h4>
+                        <h4 style="margin: 1rem 0;"><i class="fas fa-chart-line"></i> Index Trading Signals</h4>
+                        <p class="text-muted small mb-2">Nifty 50, Bank Nifty, Sensex — ATM strike, where to buy, stop-loss, targets & reasoning for index F&O.</p>
                         <div class="index-signals-grid" id="index-signals-grid">
                             <!-- Index signals will be loaded here -->
                         </div>
@@ -961,6 +963,37 @@
                     <button type="button" class="btn-modern btn-success btn-sm" id="one-click-confirm-btn">
                         <i class="fas fa-check"></i> Confirm
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Report outcome (Agentic AI) Modal -->
+    <div class="modal fade" id="reportOutcomeModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content-modern">
+                <div class="modal-header-modern">
+                    <div class="modal-title-section">
+                        <i class="fas fa-chart-line modal-icon"></i>
+                        <h5 class="modal-title">Report exit – Agentic AI</h5>
+                    </div>
+                    <button type="button" class="btn-close-modern" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body-modern">
+                    <p class="text-muted small mb-2">Report the exit price for a position so the AI can learn and improve future signals.</p>
+                    <div class="mb-3">
+                        <label class="form-label">Ticker</label>
+                        <input type="text" class="input-modern" id="report-outcome-ticker" readonly placeholder="e.g. RELIANCE.NS">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Exit price (₹)</label>
+                        <input type="number" class="input-modern" id="report-outcome-price" step="0.01" min="0" placeholder="Exit price">
+                    </div>
+                    <p id="report-outcome-message" class="small mb-0" style="display: none;"></p>
+                </div>
+                <div class="modal-footer-modern">
+                    <button type="button" class="btn-modern btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-modern btn-primary" id="report-outcome-submit">Submit</button>
                 </div>
             </div>
         </div>

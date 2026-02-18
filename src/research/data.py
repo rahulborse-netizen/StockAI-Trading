@@ -157,6 +157,11 @@ def _standardize_ohlcv(df: pd.DataFrame, ticker: str = "") -> pd.DataFrame:
     Returns:
         Standardized dataframe with columns: open, high, low, close, volume
     """
+    if df is None or not isinstance(df, pd.DataFrame):
+        raise ValueError(
+            f"No data returned for {ticker} (invalid or None dataframe). "
+            "Check ticker symbol and date range. Yahoo Finance may have returned an invalid structure."
+        )
     if df.empty:
         raise ValueError(
             f"No data returned for ticker {ticker} (empty dataframe). "
@@ -253,6 +258,8 @@ def download_yahoo_ohlcv(
     retries: int = 3,
     retry_sleep_s: float = 1.0,
     validate: bool = True,
+    *,
+    _raw_ticker: Optional[str] = None,
 ) -> OHLCV:
     """
     Download OHLCV data via Yahoo Finance with enhanced error handling and validation.
@@ -283,8 +290,11 @@ def download_yahoo_ohlcv(
         RuntimeError: If download fails after all retries
         ValueError: If data validation fails or data is invalid
     """
-    # Validate and normalize ticker for Yahoo Finance
-    ticker = _yahoo_ticker(ticker.strip())
+    # Validate and normalize ticker for Yahoo Finance (skip when using alternate index ticker)
+    if _raw_ticker is not None:
+        ticker = str(_raw_ticker).strip()
+    else:
+        ticker = _yahoo_ticker(ticker.strip())
     if not ticker:
         raise ValueError("Ticker cannot be empty")
     
@@ -381,7 +391,9 @@ def download_yahoo_ohlcv(
             if df is not None and not df.empty:
                 logger.info(f"Successfully downloaded {len(df)} rows for {ticker}")
                 break
-                
+            # yfinance can return None; treat as no data
+            if df is None:
+                df = pd.DataFrame()
             last_err = ValueError(
                 f"No data returned for {ticker} (empty dataframe). "
                 f"Date range: {start} to {end}. "
@@ -400,7 +412,32 @@ def download_yahoo_ohlcv(
             logger.info(f"Waiting {sleep_time:.1f}s before retry...")
             time.sleep(sleep_time)
     else:
-        # All retries exhausted
+        # All retries exhausted for primary ticker
+        # For index tickers (^NSEI etc.), yfinance sometimes raises TypeError internally;
+        # try once with ticker without ^ (e.g. NSEI) before giving up.
+        if ticker.startswith("^"):
+            alt_ticker = ticker[1:]
+            logger.info(
+                "Trying alternate index ticker %s (without ^) after primary %s failed",
+                alt_ticker,
+                ticker,
+            )
+            try:
+                return download_yahoo_ohlcv(
+                    ticker,  # original ticker for cache_path/logging
+                    start=start,
+                    end=end,
+                    interval=interval,
+                    cache_path=cache_path,
+                    refresh=refresh,
+                    retries=1,
+                    retry_sleep_s=retry_sleep_s,
+                    validate=validate,
+                    _raw_ticker=alt_ticker,
+                )
+            except Exception:
+                pass  # fall through to raise with primary ticker
+
         error_details = []
         if last_err:
             error_details.append(f"Last error: {str(last_err)}")
@@ -421,6 +458,9 @@ def download_yahoo_ohlcv(
             "  5. Try again later (Yahoo Finance may be temporarily unavailable)"
         ) from last_err
 
+    # Guard: yfinance can still return None in edge cases
+    if df is None:
+        df = pd.DataFrame()
     # Standardize and validate data
     try:
         df = _standardize_ohlcv(df, ticker=ticker)

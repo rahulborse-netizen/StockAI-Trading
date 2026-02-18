@@ -45,7 +45,7 @@ from src.web.upstox_api import UpstoxAPI
 from src.web.upstox_connection import connection_manager
 from src.web.watchlist import WatchlistManager
 from src.web.alerts import AlertManager
-from src.web.instrument_master import InstrumentMaster
+from src.web.instrument_master import InstrumentMaster, get_instrument_master
 from src.web.market_data import MarketDataClient
 from src.web.data_source_manager import get_data_source_manager
 from src.web.trade_planner import get_trade_planner, get_plan_manager, TradePlanStatus
@@ -882,17 +882,20 @@ def get_model_rankings():
 
 @app.route('/api/index-signals')
 def get_all_index_signals():
-    """Get trading signals for major indices. Sequential (needs Flask request context for Upstox)."""
+    """Get trading signals for Nifty 50, Bank Nifty, Sensex with strike price, entry, stop-loss, and reasoning."""
+    # Tradable indices only (Nifty, Bank Nifty, Sensex) - skip VIX for F&O trade suggestions
     indices = [
         {'name': 'Nifty 50', 'ticker': '^NSEI', 'key': 'nifty50'},
         {'name': 'Bank Nifty', 'ticker': '^NSEBANK', 'key': 'banknifty'},
         {'name': 'Sensex', 'ticker': '^BSESN', 'key': 'sensex'},
-        {'name': 'India VIX', 'ticker': '^INDIAVIX', 'key': 'indiavix'}
     ]
-    
     results = []
     elite_generator = get_elite_signal_generator()
-    
+    try:
+        from src.web.index_signals import enhance_index_signal
+    except ImportError:
+        enhance_index_signal = None
+
     for index in indices:
         try:
             from src.web.signal_cache import get_cached_signal
@@ -907,10 +910,42 @@ def get_all_index_signals():
                     instrument_key_override=None
                 )
             if 'error' in signal_response:
-                logger.warning(f"[Index Signals] {index['name']}: {signal_response.get('error')}")
+                error_msg = signal_response.get('error') or 'Data not available'
+                hint = signal_response.get('hint') or 'Try again later or connect Upstox for live data.'
+                logger.warning(f"[Index Signals] {index['name']}: {error_msg}")
+                # Still append a placeholder so UI shows the index with a message
+                results.append({
+                    'index_name': index['name'],
+                    'index_key': index['key'],
+                    'ticker': index['ticker'],
+                    'current_price': 0,
+                    'signal': 'HOLD',
+                    'probability': 0.5,
+                    'confidence': 0.5,
+                    'entry_level': 0,
+                    'entry_price': 0,
+                    'stop_loss': 0,
+                    'target_1': 0,
+                    'target_2': 0,
+                    'strike_atm': 0,
+                    'strike_ce': 0,
+                    'strike_pe': 0,
+                    'option_type': '',
+                    'option_label': '—',
+                    'option_action': 'Signal unavailable. ' + hint,
+                    'reasoning': f'{error_msg}. {hint} If cached data exists, try refreshing after a few minutes.',
+                    'regime_type': '',
+                    'volatility': 0,
+                    'recent_high': 0,
+                    'recent_low': 0,
+                    'timestamp': datetime.now().isoformat(),
+                    'error': error_msg,
+                })
                 continue
             if not signal_response.get('current_price') and signal_response.get('close'):
                 signal_response['current_price'] = signal_response['close']
+            if enhance_index_signal:
+                signal_response = enhance_index_signal(index['ticker'], signal_response)
             results.append({
                 'index_name': index['name'],
                 'index_key': index['key'],
@@ -924,15 +959,32 @@ def get_all_index_signals():
                 'stop_loss': signal_response.get('stop_loss', 0),
                 'target_1': signal_response.get('target_1', 0),
                 'target_2': signal_response.get('target_2', 0),
+                'strike_atm': signal_response.get('strike_atm', 0),
+                'strike_ce': signal_response.get('strike_ce', 0),
+                'strike_pe': signal_response.get('strike_pe', 0),
+                'strike_interval': signal_response.get('strike_interval', 0),
+                'option_type': signal_response.get('option_type', ''),
+                'option_label': signal_response.get('option_label', '—'),
+                'option_action': signal_response.get('option_action', ''),
+                'reasoning': signal_response.get('reasoning', ''),
                 'regime_type': signal_response.get('regime_type', ''),
                 'volatility': signal_response.get('volatility', 0),
                 'recent_high': signal_response.get('recent_high', 0),
                 'recent_low': signal_response.get('recent_low', 0),
-                'timestamp': signal_response.get('timestamp', datetime.now().isoformat())
+                'timestamp': signal_response.get('timestamp', datetime.now().isoformat()),
             })
         except Exception as e:
             logger.error(f"[Index Signals] {index['name']}: {e}", exc_info=True)
-    
+            results.append({
+                'index_name': index['name'],
+                'index_key': index['key'],
+                'ticker': index['ticker'],
+                'current_price': 0,
+                'signal': 'HOLD',
+                'reasoning': f'Error: {str(e)}. Please try again.',
+                'error': str(e),
+            })
+
     return jsonify(results)
 
 
@@ -1334,12 +1386,12 @@ def get_prices():
         watchlist = watchlist_manager.get_watchlist()
     prices = {}
     
-    # Try to get real-time data from Upstox if connected
+    # Try to get live data from Upstox when demat is connected
     client = _get_upstox_client()
     if client and client.access_token:
         try:
             market_client = MarketDataClient(client.access_token)
-            instrument_master = InstrumentMaster()
+            instrument_master = get_instrument_master()
             
             # Get instrument keys for watchlist
             instrument_keys = []
@@ -1350,14 +1402,15 @@ def get_prices():
                     instrument_keys.append(inst_key)
                     ticker_to_key[ticker] = inst_key
             
-            # Fetch real-time quotes
+            # Fetch live quotes (use_cache=False when connected)
             if instrument_keys:
-                quotes = market_client.get_quotes(instrument_keys)
+                quotes = market_client.get_quotes(instrument_keys, use_cache=False)
                 
                 # Map quotes back to tickers
                 for ticker, inst_key in ticker_to_key.items():
                     if inst_key in quotes:
                         parsed = market_client.parse_quote(quotes[inst_key])
+                        parsed['current_price'] = parsed.get('price', 0)  # API compatibility
                         prices[ticker] = parsed
                     else:
                         # Fallback to cached data
@@ -1394,7 +1447,8 @@ def get_prices():
     # Also handle top_stocks prices if requested (for sidebar)
     if request.args.get('for_top_stocks') == 'true':
         try:
-            # Get top stocks list
+            # When demat connected, use live data (use_cache=False)
+            use_cache = not connection_manager.is_connected()
             top_stocks_response = get_top_stocks()
             top_stocks = top_stocks_response.get_json() if hasattr(top_stocks_response, 'get_json') else top_stocks_response
             top_stocks_tickers = [s['ticker'] for s in top_stocks]
@@ -1402,7 +1456,7 @@ def get_prices():
             for ticker in top_stocks_tickers:
                 if ticker not in prices:
                     try:
-                        quote, _ = get_data_source_manager().get_quote(ticker, use_cache=True)
+                        quote, _ = get_data_source_manager().get_quote(ticker, use_cache=use_cache)
                         if quote and quote.get('current_price', 0) > 0:
                             prices[ticker] = {
                                 'price': quote['current_price'],
@@ -1435,36 +1489,45 @@ def get_prices():
 
 @app.route('/api/market/start_stream', methods=['POST'])
 def start_stream():
-    """Phase 2.1: Start price streaming via WebSocket"""
+    """Phase 2.1: Start price streaming via WebSocket. Returns 200 with status when stream unavailable so UI can fall back to REST."""
     try:
         data = request.json or {}
-        instrument_keys = data.get('instrument_keys', [])
-        tickers = data.get('tickers', [])
-        
+        instrument_keys = list(data.get('instrument_keys') or [])
+        tickers = list(data.get('tickers') or [])
+
         client = _get_upstox_client()
         if not client or not client.access_token:
             return jsonify({'error': 'Upstox not connected. Please connect first.'}), 400
-        
+
         ws_manager = get_ws_manager()
-        
-        # Connect to WebSocket if not already connected
-        # (init_websocket_handlers already registers broadcast with price_data + ticker)
+        ws_manager.set_access_token(client.access_token)
+
+        # Connect to Upstox WebSocket if not already connected
         if not ws_manager.is_connected():
-            ws_manager.set_access_token(client.access_token)
             success = ws_manager.connect()
             if not success:
-                return jsonify({'error': 'Failed to connect to Upstox WebSocket'}), 500
-        
-        # Convert tickers to instrument keys if provided; build ticker_to_key for broadcast
-        instrument_master = InstrumentMaster()
+                reason = getattr(ws_manager, 'get_last_connect_error', lambda: None)() or 'Connection failed'
+                # Return 200 so frontend doesn't treat as fatal; dashboard can still use REST for indices/prices
+                return jsonify({
+                    'status': 'stream_unavailable',
+                    'message': 'Live stream unavailable. Using REST for indices and prices.',
+                    'reason': reason,
+                    'subscribed_instruments': []
+                }), 200
+
+        # Convert tickers to instrument keys; use shared instrument master
+        instrument_master = get_instrument_master()
         ticker_to_key = {}
         if tickers:
             for ticker in tickers:
-                inst_key = instrument_master.get_instrument_key(ticker)
-                if inst_key:
-                    instrument_keys.append(inst_key)
-                    ticker_to_key[ticker] = inst_key
-        
+                try:
+                    inst_key = instrument_master.get_instrument_key(ticker)
+                    if inst_key and inst_key not in instrument_keys:
+                        instrument_keys.append(inst_key)
+                        ticker_to_key[ticker] = inst_key
+                except Exception:
+                    pass
+
         # Add indices for live index updates
         index_map = [
             ('^NSEI', 'nifty'),
@@ -1473,42 +1536,48 @@ def start_stream():
             ('^INDIAVIX', 'vix'),
         ]
         for ticker, _ in index_map:
-            inst_key = instrument_master.get_instrument_key(ticker)
-            if inst_key and inst_key not in instrument_keys:
-                instrument_keys.append(inst_key)
-                ticker_to_key[ticker] = inst_key
-        
-        # Update key->ticker map for price_update broadcast
+            try:
+                inst_key = instrument_master.get_instrument_key(ticker)
+                if inst_key and inst_key not in instrument_keys:
+                    instrument_keys.append(inst_key)
+                    ticker_to_key[ticker] = inst_key
+            except Exception:
+                pass
+
         try:
             from src.web.websocket_server import update_key_to_ticker_map
             update_key_to_ticker_map(ticker_to_key)
         except Exception:
             pass
-        
-        # Subscribe to instruments
+
+        # Upstox allows max 100 instrument keys per WebSocket
+        if len(instrument_keys) > 100:
+            instrument_keys = instrument_keys[:100]
         if instrument_keys:
             success = ws_manager.subscribe_instruments(instrument_keys)
             if not success:
-                return jsonify({'error': 'Failed to subscribe to instruments'}), 500
-        
+                return jsonify({
+                    'status': 'stream_unavailable',
+                    'message': 'Subscribe failed. Using REST for data.',
+                    'reason': 'Subscribe failed',
+                    'subscribed_instruments': []
+                }), 200
+
         subscribed = ws_manager.get_subscribed_instruments()
-        
         return jsonify({
             'status': 'success',
             'message': f'Stream started with {len(subscribed)} instruments',
             'subscribed_instruments': list(subscribed)
         })
-        
+
     except Exception as e:
         logger.error(f"Error starting stream: {e}", exc_info=True)
-        import traceback
-        error_trace = traceback.format_exc()
-        logger.error(f"Full traceback:\n{error_trace}")
         return jsonify({
-            'error': str(e),
-            'error_type': type(e).__name__,
-            'message': 'Failed to start market data stream. Please check if Upstox is connected and try again.'
-        }), 500
+            'status': 'stream_unavailable',
+            'message': 'Stream failed. Using REST for indices and prices.',
+            'reason': str(e)[:200],
+            'error': str(e)
+        }), 200
 
 @app.route('/api/market/stop_stream', methods=['POST'])
 def stop_stream():
@@ -1739,6 +1808,24 @@ def remove_alert():
         alert_manager.remove_alert(alert_id)
         return jsonify({'status': 'success', 'message': 'Alert removed'})
     return jsonify({'status': 'error', 'message': 'Alert ID required'}), 400
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """Health/readiness: ok, upstox connected, signal cache count. Use for 'is the app up and usable?' checks."""
+    try:
+        upstox = connection_manager.is_connected()
+        from src.web.signal_cache import get_cache_meta
+        meta = get_cache_meta()
+        cache_count = meta.get('count', 0)
+        return jsonify({
+            'ok': True,
+            'upstox': upstox,
+            'cache_count': cache_count,
+        })
+    except Exception as e:
+        logger.exception("Health check failed")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
 
 @app.route('/api/upstox/test', methods=['GET'])
 def test_upstox_endpoint():
@@ -2826,6 +2913,45 @@ def refresh_stocks_universe():
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
+def _sanitize_for_json(obj):
+    """Replace NaN/NaT and non-JSON-serializable values so jsonify never emits invalid JSON."""
+    if obj is None:
+        return None
+    try:
+        import math
+        if isinstance(obj, float):
+            if math.isnan(obj) or obj == float('inf') or obj == float('-inf'):
+                return None
+            return obj
+    except Exception:
+        pass
+    try:
+        if hasattr(obj, 'dtype') and hasattr(obj, 'item'):  # numpy scalar
+            return _sanitize_for_json(obj.item())
+    except Exception:
+        return None
+    try:
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            if np.isnan(obj):
+                return None
+            return float(obj)
+        if isinstance(obj, (np.str_, np.unicode_)):
+            return str(obj)
+    except Exception:
+        return None
+    if hasattr(pd, 'isna') and pd.isna(obj):
+        return None
+    if isinstance(obj, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, (str, int, bool)):
+        return obj
+    return obj
+
+
 @app.route('/api/stocks/universe', methods=['GET'])
 def get_stocks_universe():
     """Get paginated NSE/BSE stock list. Query: exchange (NSE|BSE), limit, offset, search."""
@@ -2842,6 +2968,9 @@ def get_stocks_universe():
     try:
         su = get_stock_universe()
         result = su.get_stocks_page(exchange=exchange, limit=limit, offset=offset, search=search)
+        # Ensure no NaN/invalid values in stocks (pandas can produce NaN in instrument_key etc.)
+        stocks = result.get('stocks') or []
+        result['stocks'] = [_sanitize_for_json(s) for s in stocks]
         return jsonify(result)
     except Exception as e:
         logger.exception("Stocks universe API failed")
@@ -3037,6 +3166,50 @@ def get_signals_cache_status():
         })
     except Exception as e:
         return jsonify({'count': 0, 'cached': 0, 'total': 30, 'done': False, 'error': str(e)})
+
+
+@app.route('/api/agentic/status', methods=['GET'])
+def agentic_status():
+    """Agentic AI status: pending signals, current ensemble weights (self-correcting)."""
+    try:
+        from src.web.ai_models.agentic_loop import get_agentic_status
+        return jsonify(get_agentic_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agentic/outcome', methods=['POST'])
+def agentic_outcome():
+    """Report outcome for a ticker (e.g. position closed). Body: { "ticker": "RELIANCE.NS", "exit_price": 1234.5 }. Triggers learn-from-feedback."""
+    try:
+        data = request.json or {}
+        ticker = (data.get('ticker') or '').strip()
+        exit_price = data.get('exit_price')
+        if not ticker:
+            return jsonify({'error': 'ticker required'}), 400
+        try:
+            exit_price = float(exit_price)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'exit_price must be a number'}), 400
+        from src.web.ai_models.agentic_loop import resolve_and_learn
+        result = resolve_and_learn(ticker, exit_price)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Agentic outcome failed")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agentic/learn', methods=['POST'])
+def agentic_learn():
+    """Trigger learn-from-feedback now (update ensemble weights from recent performance). Query: days=30."""
+    try:
+        days = request.args.get('days', 30, type=int)
+        days = max(7, min(365, days))
+        from src.web.ai_models.agentic_loop import learn_from_feedback
+        result = learn_from_feedback(days=days)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/risk/status')
@@ -4731,6 +4904,38 @@ def get_auto_trading_positions():
     except Exception as e:
         logger.error(f"Error getting auto trading positions: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+def _log_startup():
+    """One-time startup log: DataSourceManager, signal cache path, optional ML components."""
+    try:
+        from src.web.signal_cache import CACHE_DIR, CACHE_FILE
+        logger.info("[Startup] Signal cache path: %s", CACHE_FILE.resolve() if CACHE_FILE else CACHE_DIR)
+    except Exception as e:
+        logger.warning("[Startup] Signal cache path: not available (%s)", e)
+    try:
+        dsm = get_data_source_manager()
+        logger.info("[Startup] DataSourceManager ready (Yahoo fallback; Upstox when connected)")
+    except Exception as e:
+        logger.warning("[Startup] DataSourceManager: %s", e)
+    try:
+        from src.web.ai_models.xgboost_predictor import XGBOOST_AVAILABLE
+    except Exception:
+        XGBOOST_AVAILABLE = False
+    try:
+        from src.web.ai_models.lstm_predictor import TENSORFLOW_AVAILABLE
+    except Exception:
+        TENSORFLOW_AVAILABLE = False
+    logger.info("[Startup] XGBoost=%s, TensorFlow=%s", XGBOOST_AVAILABLE, TENSORFLOW_AVAILABLE)
+    try:
+        from src.web.ai_models.agentic_loop import learn_from_feedback
+        learn_from_feedback(days=30)
+        logger.info("[Startup] Agentic: ensemble weights loaded from feedback")
+    except Exception as e:
+        logger.debug("[Startup] Agentic learn_from_feedback: %s", e)
+
+
+_log_startup()
 
 if __name__ == '__main__':
     host = os.getenv("FLASK_HOST", "0.0.0.0")

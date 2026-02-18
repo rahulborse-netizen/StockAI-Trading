@@ -4,12 +4,12 @@ Manages multiple data sources - Upstox prioritized, Yahoo fallback
 """
 import os
 import logging
+import time
 from typing import Optional, Dict, List, Tuple
 from datetime import datetime
 from enum import Enum
 
 logger = logging.getLogger(__name__)
-
 
 # Map index names to Yahoo tickers - never append .NS to these
 _YAHOO_INDEX_MAP = {
@@ -155,18 +155,23 @@ class DataSourceManager:
                     inst_key = instrument_master.get_instrument_key(symbol)
                     
                     if inst_key:
+                        # When connected to demat, prefer live data (use_cache=False)
                         quote = market_client.get_quote(inst_key, use_cache=use_cache)
                         if quote:
                             parsed = market_client.parse_quote(quote)
                             if parsed.get('price', 0) > 0:
-                                logger.debug(f"Got quote for {symbol} from Upstox")
+                                logger.debug(f"Got quote for {symbol} from Upstox (live)")
                                 parsed['source'] = 'upstox'
+                                parsed['current_price'] = parsed.get('price', 0)  # for API compatibility
                                 return parsed, DataSource.UPSTOX
                 
                 elif source == DataSource.YAHOO_FINANCE:
                     ticker = _yahoo_ticker(symbol)
                     stock = client.Ticker(ticker)
                     hist = stock.history(period="1d", interval="1m")
+                    # Fallback: if intraday empty (market closed or Yahoo glitch), try daily
+                    if hist is None or hist.empty:
+                        hist = stock.history(period="5d", interval="1d")
                     if hist is None or hist.empty:
                         continue
                     latest = hist.iloc[-1]
@@ -182,7 +187,7 @@ class DataSourceManager:
                         'high': float(latest['High']),
                         'low': float(latest['Low']),
                         'close': prev_close_price,
-                        'volume': int(latest['Volume']),
+                        'volume': int(latest.get('Volume', 0)),
                         'change': change,
                         'change_pct': change_pct,
                         'timestamp': datetime.now().isoformat(),
@@ -194,8 +199,9 @@ class DataSourceManager:
             except Exception as e:
                 logger.debug(f"Source {source_info['source']} failed for {symbol}: {e}")
                 continue
-        
-        logger.warning(f"All data sources failed for {symbol}")
+
+        # Log at DEBUG only so console stays clean; UI already shows missing prices
+        logger.debug(f"All data sources failed for {symbol} (Upstox/Yahoo unavailable or no data)")
         return None, None
     
     def get_index_data(self, index_name: str) -> Tuple[Optional[Dict], DataSource]:
@@ -254,14 +260,15 @@ class DataSourceManager:
                     
                     upstox_key = index_map.get(index_name.lower())
                     if upstox_key:
-                        quote = market_client.get_quote(upstox_key, use_cache=True)
+                        # Live index data when connected to demat (no cache)
+                        quote = market_client.get_quote(upstox_key, use_cache=False)
                         if quote:
                             parsed = market_client.parse_quote(quote)
                             if parsed.get('price', 0) > 0:
                                 parsed['value'] = parsed.get('price', 0)  # App expects 'value'
                                 parsed['index_name'] = index_name
                                 parsed['source'] = 'upstox'
-                                logger.debug(f"Got index data for {index_name} from Upstox")
+                                logger.info(f"Got index data for {index_name} from Upstox (live)")
                                 return parsed, DataSource.UPSTOX
                 
                 elif source == DataSource.YAHOO_FINANCE:

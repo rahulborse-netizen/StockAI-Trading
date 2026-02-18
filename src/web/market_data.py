@@ -267,27 +267,35 @@ class MarketDataClient:
             Parsed quote data
         """
         try:
-            # Upstox quote structure (may vary)
-            ohlc = quote_data.get('ohlc', {})
-            last_price = quote_data.get('last_price', 0)
-            open_price = ohlc.get('open', last_price)
-            high = ohlc.get('high', last_price)
-            low = ohlc.get('low', last_price)
-            close = ohlc.get('close', last_price)
-            
-            # Calculate change
-            change = last_price - close if close > 0 else 0
-            change_pct = (change / close * 100) if close > 0 else 0
-            
+            # Upstox quote structure (may vary); guard against None when sources fail
+            def _num(x, default=0):
+                if x is None:
+                    return default
+                try:
+                    return float(x)
+                except (TypeError, ValueError):
+                    return default
+
+            ohlc = quote_data.get('ohlc', {}) or {}
+            last_price = _num(quote_data.get('last_price'), 0)
+            open_price = _num(ohlc.get('open'), last_price)
+            high = _num(ohlc.get('high'), last_price)
+            low = _num(ohlc.get('low'), last_price)
+            close = _num(ohlc.get('close'), last_price)
+
+            change = (last_price - close) if close and close > 0 else 0
+            change_pct = (change / close * 100) if close and close > 0 else 0
+            vol = _num(quote_data.get('volume'), 0)
+
             return {
-                'price': float(last_price),
-                'open': float(open_price),
-                'high': float(high),
-                'low': float(low),
-                'close': float(close),
-                'change': float(change),
-                'change_pct': float(change_pct),
-                'volume': float(quote_data.get('volume', 0)),
+                'price': last_price,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'close': close,
+                'change': change,
+                'change_pct': change_pct,
+                'volume': vol,
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:

@@ -351,7 +351,15 @@ class StockUniverse:
                 df = df[df.apply(matches, axis=1)]
         total = len(df)
         limit = min(max(1, limit), 2000)
-        df = df.iloc[offset : offset + limit]
+        df = df.iloc[offset : offset + limit].copy()
+        # Ensure no NaN in string columns (instrument_key, etc.) so JSON is always valid
+        string_cols = ['instrument_key', 'isin', 'ticker', 'name', 'tradingsymbol', 'exchange']
+        for col in string_cols:
+            if col in df.columns:
+                df[col] = df[col].fillna('').astype(str).replace('nan', '').replace('<na>', '')
+        for col in df.columns:
+            if col not in string_cols and (df[col].dtype == object or str(df[col].dtype) == 'string'):
+                df[col] = df[col].fillna('').astype(str).replace('nan', '').replace('<na>', '')
         stocks = df.to_dict("records")
         return {"stocks": stocks, "total": total}
 

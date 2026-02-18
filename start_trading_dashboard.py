@@ -6,6 +6,16 @@ import os
 import sys
 from pathlib import Path
 
+# Fix SSL for yfinance/curl before any HTTP calls (avoids "unable to get local issuer certificate")
+try:
+    import certifi
+    _cert_path = certifi.where()
+    os.environ.setdefault("SSL_CERT_FILE", _cert_path)
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", _cert_path)
+    os.environ.setdefault("CURL_CA_BUNDLE", _cert_path)
+except ImportError:
+    pass
+
 # Add project root to path
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))

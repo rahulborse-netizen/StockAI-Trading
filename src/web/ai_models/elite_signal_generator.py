@@ -137,13 +137,18 @@ class EliteSignalGenerator:
             # Ensure end_date is not before 2020 (data availability check)
             min_date = date(2020, 1, 1)
             if end_date_obj < min_date:
-                logger.error(f"[ELITE Signal] End date {end_date_obj} is too old, using today")
+                logger.error(f"[ELITE Signal] End date {end_date_obj} is too old, using yesterday")
+                end_date_obj = today - timedelta(days=1)
+            
+            # Final safety check: ensure end_date is not in the future
+            if end_date_obj > today:
+                logger.warning(f"[ELITE Signal] End date {end_date_obj} is in the future! Using yesterday.")
                 end_date_obj = today - timedelta(days=1)
             
             end_date = end_date_obj.strftime('%Y-%m-%d')
             start_date = (end_date_obj - timedelta(days=365)).strftime('%Y-%m-%d')  # 1 year before
             
-            logger.info(f"[ELITE Signal] Using dynamic date range: {start_date} to {end_date} (today: {today})")
+            logger.info(f"[ELITE Signal] Using dynamic date range: {start_date} to {end_date} (today: {today}, end_date: {end_date_obj})")
             
             logger.info(f"[ELITE Signal] Date range for {ticker}: {start_date} to {end_date}")
             
@@ -172,23 +177,52 @@ class EliteSignalGenerator:
             
             # Fallback to Yahoo Finance
             if ohlcv is None:
+                from src.research.data import _is_index_ticker
                 force_refresh = False
                 if cache_path.exists():
                     cache_age = (dt.now() - dt.fromtimestamp(cache_path.stat().st_mtime)).total_seconds()
-                    if cache_age > 86400:
+                    # For indices, use cache if less than 7 days old (Yahoo Finance can be unreliable)
+                    cache_max_age = 7 * 86400 if _is_index_ticker(ticker) else 86400
+                    if cache_age > cache_max_age:
                         force_refresh = True
                         logger.info(f"[ELITE Signal] Cache for {ticker} is {cache_age/3600:.1f} hours old, forcing refresh")
-                ohlcv = download_yahoo_ohlcv(
-                    ticker=ticker,
-                    start=start_date,
-                    end=end_date,
-                    interval='1d',
-                    cache_path=cache_path,
-                    refresh=force_refresh
-                )
+                    else:
+                        # Try loading from cache first for indices (more reliable)
+                        try:
+                            from src.research.data import load_cached_csv
+                            cached = load_cached_csv(cache_path)
+                            if len(cached.df) >= 60:
+                                ohlcv = cached
+                                logger.info(f"[ELITE Signal] Using cached data for {ticker} ({len(cached.df)} days)")
+                        except Exception as cache_err:
+                            logger.debug(f"[ELITE Signal] Cache load failed: {cache_err}")
+                
+                if ohlcv is None:
+                    try:
+                        ohlcv = download_yahoo_ohlcv(
+                            ticker=ticker,
+                            start=start_date,
+                            end=end_date,
+                            interval='1d',
+                            cache_path=cache_path,
+                            refresh=force_refresh
+                        )
+                    except Exception as yf_err:
+                        logger.warning(f"[ELITE Signal] Yahoo Finance failed for {ticker}: {yf_err}")
+                        # For indices, try loading from cache even if old
+                        if _is_index_ticker(ticker) and cache_path.exists():
+                            try:
+                                from src.research.data import load_cached_csv
+                                ohlcv = load_cached_csv(cache_path)
+                                logger.info(f"[ELITE Signal] Using stale cache for {ticker} after Yahoo Finance failure")
+                            except Exception:
+                                pass
             
             if ohlcv is None or len(ohlcv.df) == 0:
+                from src.research.data import _is_index_ticker
                 hint = data_hint or 'Historical data unavailable. Connect Upstox or verify ticker symbol.'
+                if _is_index_ticker(ticker):
+                    hint = 'Index data unavailable. Yahoo Finance may be temporarily down. Try again later or connect Upstox for live data.'
                 return {'error': 'No data available for ticker', 'ticker': ticker, 'hint': hint}
             
             # Generate features
@@ -205,7 +239,7 @@ class EliteSignalGenerator:
             labeled_df = add_label_forward_return_up(feat_df, days=1, threshold=0.0)
             ml_df = clean_ml_frame(labeled_df, feature_cols=feature_cols, label_col="label_up")
             
-            MIN_DAYS = 30  # Reduced for demat holdings (newer listings like IREDA, NTPCGREEN)
+            MIN_DAYS = 60  # Lowered from 100 for newer listings (demat stocks); UI shows notice when 60-99 days
             if len(ml_df) < MIN_DAYS:
                 days_available = len(ml_df)
                 days_needed = max(0, MIN_DAYS - days_available)
@@ -379,6 +413,13 @@ class EliteSignalGenerator:
                     predictions=tf_predictions
                 )
                 signal_response['multi_timeframe'] = tf_analysis
+
+            # Agentic: record signal for outcome tracking (learn from errors)
+            try:
+                from src.web.ai_models.agentic_loop import record_signal as agentic_record_signal
+                agentic_record_signal(ticker, signal_response)
+            except Exception as e:
+                logger.debug("Agentic record_signal skipped: %s", e)
             
             return signal_response
             

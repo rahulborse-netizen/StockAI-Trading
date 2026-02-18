@@ -4,12 +4,17 @@ Handles OAuth2 flow, session management, and connection validation
 """
 
 import logging
+import time
 from typing import Optional, Dict, Tuple
 from flask import session
 
 from src.web.upstox_api import UpstoxAPI
 
 logger = logging.getLogger(__name__)
+
+# Cache is_connected() result to avoid calling get_profile() on every request (e.g. status poll)
+_CONNECTED_CACHE: Dict[str, float] = {"value": False, "until": 0.0}
+_CONNECTED_CACHE_TTL_SEC = 45
 
 
 class UpstoxConnectionManager:
@@ -40,29 +45,48 @@ class UpstoxConnectionManager:
         return self.client
     
     def is_connected(self) -> bool:
-        """Check if Upstox is connected"""
-        # First check if we have a token in session
+        """Check if Upstox is connected. Uses a short cache to avoid hammering get_profile()."""
+        now = time.time()
+        if now < _CONNECTED_CACHE["until"]:
+            return _CONNECTED_CACHE["value"]
         access_token = session.get('upstox_access_token')
         if not access_token:
+            _CONNECTED_CACHE["value"] = False
+            _CONNECTED_CACHE["until"] = now + _CONNECTED_CACHE_TTL_SEC
             logger.debug("[ConnectionManager] No access token in session")
             return False
-        
-        # Then check if client can be built and works
         client = self.get_client()
         if not client or not client.access_token:
+            _CONNECTED_CACHE["value"] = False
+            _CONNECTED_CACHE["until"] = now + _CONNECTED_CACHE_TTL_SEC
             logger.debug("[ConnectionManager] Client is None or has no access token")
             return False
-        
-        # Test connection
         try:
             profile = client.get_profile()
             if 'error' in profile:
-                logger.warning(f"[ConnectionManager] Profile check returned error: {profile.get('error')}")
+                err = profile.get('error', '')
+                status_code = profile.get('status_code')
+                if status_code == 401:
+                    self._invalidate_connected_cache()
+                    if self.refresh_token_if_needed():
+                        return self.is_connected()
+                logger.warning("[ConnectionManager] Profile check returned error: %s", err)
+                _CONNECTED_CACHE["value"] = False
+                _CONNECTED_CACHE["until"] = now + _CONNECTED_CACHE_TTL_SEC
                 return False
+            _CONNECTED_CACHE["value"] = True
+            _CONNECTED_CACHE["until"] = now + _CONNECTED_CACHE_TTL_SEC
             return True
         except Exception as e:
-            logger.warning(f"[ConnectionManager] Exception checking connection: {e}")
+            logger.warning("[ConnectionManager] Exception checking connection: %s", e)
+            _CONNECTED_CACHE["value"] = False
+            _CONNECTED_CACHE["until"] = now + min(10, _CONNECTED_CACHE_TTL_SEC)
             return False
+
+    @staticmethod
+    def _invalidate_connected_cache() -> None:
+        global _CONNECTED_CACHE
+        _CONNECTED_CACHE["until"] = 0.0
     
     def validate_redirect_uri(self, redirect_uri: str) -> Tuple[bool, str]:
         """
@@ -93,6 +117,7 @@ class UpstoxConnectionManager:
     
     def save_connection(self, api_key: str, api_secret: str, redirect_uri: str, access_token: Optional[str] = None, refresh_token: Optional[str] = None):
         """Save connection details to session with persistence"""
+        self._invalidate_connected_cache()
         session['upstox_api_key'] = api_key
         session['upstox_api_secret'] = api_secret
         session['upstox_redirect_uri'] = redirect_uri
@@ -154,6 +179,7 @@ class UpstoxConnectionManager:
     
     def clear_connection(self):
         """Clear connection from session"""
+        self._invalidate_connected_cache()
         session.pop('upstox_api_key', None)
         session.pop('upstox_api_secret', None)
         session.pop('upstox_redirect_uri', None)

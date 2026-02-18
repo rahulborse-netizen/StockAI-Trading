@@ -12,7 +12,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load saved theme
     const savedTheme = localStorage.getItem('theme') || 'dark';
     setTheme(savedTheme);
-    
+    // Upstox connection status (so we show Connected after refresh or OAuth callback)
+    fetch('/api/upstox/status', { credentials: 'same-origin' })
+        .then(function(r) { return r.ok ? r.json() : {}; })
+        .then(function(status) {
+            window.upstoxConnected = !!status.connected;
+            var statusEl = document.getElementById('connection-status');
+            if (statusEl) {
+                if (status.connected) {
+                    statusEl.innerHTML = '<i class="fas fa-circle"></i><span class="mobile-hide">Connected</span>';
+                    statusEl.classList.add('connected');
+                } else {
+                    statusEl.innerHTML = '<i class="fas fa-circle"></i><span class="mobile-hide">Disconnected</span>';
+                    statusEl.classList.remove('connected');
+                }
+            }
+        })
+        .catch(function() {});
     // Phase 2.1: Initialize WebSocket client
     if (window.marketDataWS) {
         marketDataWS = window.marketDataWS;
@@ -44,6 +60,21 @@ document.addEventListener('DOMContentLoaded', function() {
     loadOrders();
     updateStats();
     updatePortfolioSummary();
+    // Ensure market indices load (from trading-platform.js when available, or fetch here)
+    setTimeout(function() {
+        if (typeof loadMarketIndices === 'function') {
+            loadMarketIndices();
+        } else {
+            fetch('/api/market-indices').then(function(r) { return r.ok ? r.json() : {}; }).then(function(indices) {
+                if (typeof updateIndexDisplay !== 'function') return;
+                ['nifty', 'sensex', 'banknifty', 'vix'].forEach(function(id) {
+                    if (indices[id] && indices[id].value != null) {
+                        updateIndexDisplay(id, indices[id].value, indices[id].change, indices[id].change_pct);
+                    }
+                });
+            }).catch(function() {});
+        }
+    }, 300);
     
     // Initialize auto trading card visibility
     const savedAutoTrading = localStorage.getItem('autoTradingCardVisible');
@@ -164,6 +195,7 @@ async function loadWatchlist() {
         const response = await fetch('/api/watchlist');
         const watchlist = await response.json();
         const container = document.getElementById('watchlist-container');
+        if (!container) return;
         container.innerHTML = '';
         
         if (watchlist.length === 0) {
@@ -271,6 +303,9 @@ async function removeFromWatchlist(ticker) {
     }
 }
 
+// Phase 2.1: Log WebSocket fallback only once per session to avoid console spam
+let _webSocketStreamWarned = false;
+
 // Phase 2.1: Start WebSocket stream for watchlist + holdings + indices (includes NIFTY, SENSEX, etc.)
 async function startWebSocketStream() {
     try {
@@ -287,15 +322,29 @@ async function startWebSocketStream() {
         });
         if (streamResponse.ok) {
             const result = await streamResponse.json();
-            console.log('[WebSocket] Stream started:', result.message || 'Subscribed');
+            if (result.status === 'stream_unavailable') {
+                if (typeof loadMarketIndices === 'function') loadMarketIndices();
+                if (!_webSocketStreamWarned) {
+                    _webSocketStreamWarned = true;
+                    const reason = result.reason ? ' (' + result.reason + ')' : '';
+                    console.warn('[WebSocket] Live stream unavailable. Using REST for indices and prices.' + reason);
+                }
+            } else {
+                _webSocketStreamWarned = false;
+                console.log('[WebSocket] Stream started:', result.message || 'Subscribed');
+            }
         } else {
             const errorData = await streamResponse.json().catch(() => ({}));
-            if (errorData.error && !errorData.error.includes('Upstox not connected')) {
-                console.warn('WebSocket stream:', errorData.error || streamResponse.statusText);
+            if (errorData.error && !errorData.error.includes('Upstox not connected') && !_webSocketStreamWarned) {
+                _webSocketStreamWarned = true;
+                console.warn('[WebSocket]', errorData.error || streamResponse.statusText);
             }
         }
     } catch (error) {
-        console.error('Error starting WebSocket stream:', error);
+        if (!_webSocketStreamWarned) {
+            _webSocketStreamWarned = true;
+            console.error('[WebSocket] Error starting stream:', error);
+        }
     }
 }
 
@@ -577,14 +626,18 @@ async function showLevels(ticker) {
     }
 }
 
-// Load top stocks with modern cards
+// Load top stocks with modern cards (sidebar uses id="stock-list-container")
 async function loadTopStocks() {
     try {
         const response = await fetch('/api/top_stocks');
         const stocks = await response.json();
-        const container = document.getElementById('top-stocks-container');
+        const container = document.getElementById('stock-list-container') || document.getElementById('top-stocks-container');
+        if (!container) return;
         container.innerHTML = '';
-        
+        if (!Array.isArray(stocks) || stocks.length === 0) {
+            container.innerHTML = '<div class="text-muted small p-2">No stocks loaded. Connect Upstox or add to watchlist.</div>';
+            return;
+        }
         stocks.forEach((stock, index) => {
             const card = document.createElement('div');
             card.className = 'top-stock-card fade-in';
@@ -603,6 +656,8 @@ async function loadTopStocks() {
             `;
             container.appendChild(card);
         });
+        const countEl = document.getElementById('top-stocks-count');
+        if (countEl) countEl.textContent = String(stocks.length);
     } catch (error) {
         console.error('Error loading top stocks:', error);
     }
@@ -613,15 +668,15 @@ function addToWatchlistFromTop(ticker) {
     addToWatchlist();
 }
 
-// Load alerts
+// Load alerts (only if alerts-container exists in DOM)
 async function loadAlerts() {
     try {
+        const container = document.getElementById('alerts-container');
+        if (!container) return;
         const response = await fetch('/api/alerts');
         const alerts = await response.json();
-        const container = document.getElementById('alerts-container');
         container.innerHTML = '';
-        
-        if (alerts.length === 0) {
+        if (!alerts || alerts.length === 0) {
             container.innerHTML = '<div class="empty-state"><i class="fas fa-bell-slash"></i><p>No alerts set. Add alerts to get notified.</p></div>';
             return;
         }
@@ -932,6 +987,7 @@ async function connectUpstox() {
                     redirect_uri: redirectUri,
                     access_token: accessToken
                 }),
+                credentials: 'same-origin',
                 signal: controller.signal
             });
         } finally {

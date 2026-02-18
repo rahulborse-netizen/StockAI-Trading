@@ -1,6 +1,7 @@
 """
 WebSocket Server for Upstox Market Data Streaming
-Phase 2.1: Real-time data integration
+Phase 2.1: Real-time data integration.
+Uses Upstox "Get Market Data Feed Authorize" API to obtain a one-time wss URL (required for connection).
 """
 import logging
 import json
@@ -10,16 +11,22 @@ from typing import Dict, Set, Optional, Callable
 import websocket
 from datetime import datetime
 
+try:
+    import requests
+except ImportError:
+    requests = None
+
 logger = logging.getLogger(__name__)
+
+# Upstox REST base for authorize endpoint
+UPSTOX_FEED_AUTHORIZE_URL = "https://api.upstox.com/v2/feed/market-data-feed/authorize"
 
 
 class UpstoxWebSocketManager:
     """
-    Manages WebSocket connection to Upstox for real-time market data streaming
+    Manages WebSocket connection to Upstox for real-time market data streaming.
+    Connects using the authorized one-time wss URL from Upstox API.
     """
-    
-    # Upstox WebSocket URLs
-    WS_URL = "wss://api.upstox.com/v2/feed/market-data-feed"
     
     def __init__(self, access_token: str = None):
         self.access_token = access_token
@@ -33,11 +40,48 @@ class UpstoxWebSocketManager:
         self._ws_thread = None
         self._stop_flag = threading.Event()
         self._lock = threading.Lock()
-        
+        self.last_connect_error: Optional[str] = None
+
+    def get_last_connect_error(self) -> Optional[str]:
+        """Return last connection failure reason for API feedback."""
+        return self.last_connect_error
+
     def set_access_token(self, access_token: str):
         """Update access token"""
         self.access_token = access_token
-        
+
+    def _get_authorized_ws_url(self) -> Optional[str]:
+        """
+        Get one-time WebSocket URL from Upstox Market Data Feed Authorize API.
+        Required: Upstox expects Bearer auth and returns a wss URL with a single-use code.
+        """
+        if not self.access_token or not requests:
+            return None
+        try:
+            resp = requests.get(
+                UPSTOX_FEED_AUTHORIZE_URL,
+                headers={
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Accept": "application/json",
+                },
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                self.last_connect_error = f"Authorize API returned {resp.status_code}"
+                logger.warning("Feed authorize API: %s %s", resp.status_code, resp.text[:200])
+                return None
+            data = resp.json()
+            payload = data.get("data") or {}
+            url = payload.get("authorized_redirect_uri") or payload.get("authorizedRedirectUri")
+            if not url or not url.startswith("wss://"):
+                self.last_connect_error = "No authorized wss URL in response"
+                return None
+            return url
+        except Exception as e:
+            self.last_connect_error = str(e)[:200]
+            logger.warning("Failed to get authorized WebSocket URL: %s", e)
+            return None
+
     def add_price_callback(self, callback: Callable):
         """
         Register a callback function to be called when price updates are received
@@ -57,60 +101,64 @@ class UpstoxWebSocketManager:
     
     def connect(self) -> bool:
         """
-        Establish WebSocket connection to Upstox
-        Returns True if connection successful
+        Establish WebSocket connection to Upstox using authorized one-time URL.
+        Returns True if connection successful. Tries once with optional retry.
         """
         if not self.access_token:
+            self.last_connect_error = "No access token"
             logger.error("Cannot connect: No access token provided")
             return False
-            
-        try:
-            # Create WebSocket URL with auth
-            ws_url = f"{self.WS_URL}?access_token={self.access_token}"
-            
-            # WebSocket callbacks
-            def on_open(ws):
-                logger.info("✅ WebSocket connection opened")
-                self.connected = True
-                self.reconnect_attempts = 0
-                
-            def on_message(ws, message):
-                self._handle_message(message)
-                
-            def on_error(ws, error):
-                logger.error(f"❌ WebSocket error: {error}")
-                
-            def on_close(ws, close_status_code, close_msg):
-                logger.warning(f"WebSocket closed: {close_status_code} - {close_msg}")
+
+        self.last_connect_error = None
+        for attempt in range(2):  # initial + one retry
+            if attempt > 0:
+                logger.info("Retrying WebSocket connection in 2s...")
+                time.sleep(2)
+            ws_url = self._get_authorized_ws_url()
+            if not ws_url:
+                continue
+            try:
                 self.connected = False
-                if not self._stop_flag.is_set():
-                    self._attempt_reconnect()
-            
-            # Create WebSocket connection
-            self.ws = websocket.WebSocketApp(
-                ws_url,
-                on_open=on_open,
-                on_message=on_message,
-                on_error=on_error,
-                on_close=on_close
-            )
-            
-            # Run WebSocket in separate thread
-            self._ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
-            self._ws_thread.start()
-            
-            # Wait for connection to establish (max 5 seconds)
-            for i in range(50):
-                if self.connected:
-                    return True
-                time.sleep(0.1)
-                
-            logger.warning("WebSocket connection timeout")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error connecting to WebSocket: {e}")
-            return False
+                # WebSocket callbacks
+                def on_open(ws):
+                    logger.info("✅ WebSocket connection opened")
+                    self.connected = True
+                    self.reconnect_attempts = 0
+
+                def on_message(ws, message):
+                    self._handle_message(message)
+
+                def on_error(ws, error):
+                    err_str = str(error) if error else "unknown"
+                    logger.error("❌ WebSocket error: %s", err_str)
+                    self.last_connect_error = err_str[:200]
+
+                def on_close(ws, close_status_code, close_msg):
+                    logger.warning("WebSocket closed: %s - %s", close_status_code, close_msg)
+                    self.connected = False
+                    if not self._stop_flag.is_set():
+                        self._attempt_reconnect()
+
+                self.ws = websocket.WebSocketApp(
+                    ws_url,
+                    on_open=on_open,
+                    on_message=on_message,
+                    on_error=on_error,
+                    on_close=on_close
+                )
+                self._ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
+                self._ws_thread.start()
+                # Wait for connection (max 10 seconds)
+                for _ in range(100):
+                    if self.connected:
+                        return True
+                    time.sleep(0.1)
+                self.last_connect_error = "Connection timeout (10s)"
+                logger.warning("WebSocket connection timeout")
+            except Exception as e:
+                self.last_connect_error = str(e)[:200]
+                logger.error("Error connecting to WebSocket: %s", e)
+        return False
     
     def _run_websocket(self):
         """Run WebSocket connection (called in separate thread)"""
@@ -219,82 +267,72 @@ class UpstoxWebSocketManager:
     
     def _handle_message(self, message):
         """
-        Handle incoming WebSocket messages
-        Parse and broadcast price updates to registered callbacks
+        Handle incoming WebSocket messages. Upstox sends JSON with top-level 'feeds' (no 'type').
+        Parse and broadcast price updates to registered callbacks.
         """
         try:
-            # Parse message
             if isinstance(message, bytes):
-                # Binary message - Upstox uses protobuf for efficiency
-                # For now, we'll handle JSON messages
                 logger.debug("Received binary message (protobuf)")
                 return
-                
+
             data = json.loads(message) if isinstance(message, str) else message
-            
-            # Check message type
-            msg_type = data.get('type')
-            
-            if msg_type == 'feed':
-                # Market data feed update
-                feeds = data.get('feeds', {})
+            # Upstox response: { "feeds": { "NSE_EQ|INE...": { "ltpc": {...} or "ff": { "marketFF": { "ltpc": {...} } } } }, "currentTs": "..." }
+            feeds = data.get("feeds") or data.get("feed") or {}
+            if isinstance(feeds, dict):
                 for instrument_key, feed_data in feeds.items():
                     self._process_price_update(instrument_key, feed_data)
-                    
-            elif msg_type == 'error':
-                logger.error(f"WebSocket error message: {data.get('message')}")
-                
-            elif msg_type == 'success':
-                logger.info(f"WebSocket success: {data.get('message')}")
-                
-            else:
-                logger.debug(f"Unknown message type: {msg_type}")
-                
+                return
+            msg_type = data.get("type")
+            if msg_type == "error":
+                logger.error("WebSocket error message: %s", data.get("message"))
+            elif msg_type == "success":
+                logger.info("WebSocket success: %s", data.get("message"))
         except json.JSONDecodeError as e:
-            logger.error(f"Error decoding WebSocket message: {e}")
+            logger.error("Error decoding WebSocket message: %s", e)
         except Exception as e:
-            logger.error(f"Error handling WebSocket message: {e}")
+            logger.error("Error handling WebSocket message: %s", e)
     
     def _process_price_update(self, instrument_key: str, feed_data: dict):
         """
-        Process price update and call registered callbacks
-        
-        Args:
-            instrument_key: Upstox instrument key
-            feed_data: Raw feed data from Upstox
+        Process price update. Supports ltpc mode (top-level ltpc) and full mode (ff.marketFF.ltpc).
         """
         try:
-            # Parse Upstox feed data format
-            # Upstox sends: { 'ltpc': {'ltp': price, 'ltt': timestamp, ...}, 'ff': {...} }
-            
-            ltpc = feed_data.get('ltpc', {})
-            market_ff = feed_data.get('ff', {})
-            
-            # Extract relevant data
+            ltpc = feed_data.get("ltpc") or {}
+            market_ff = feed_data.get("ff") or {}
+            if market_ff and not ltpc:
+                market_ff = market_ff.get("marketFF") or market_ff
+                ltpc = market_ff.get("ltpc") or ltpc
+            ohlc = (market_ff.get("marketOHLC") or {}).get("ohlc") or []
+            ohlc_1d = next((c for c in ohlc if isinstance(c, dict) and c.get("interval") == "1d"), {})
+            close = ltpc.get("cp") if isinstance(ltpc.get("cp"), (int, float)) else (ohlc_1d.get("close") or 0)
+            try:
+                close = float(close)
+            except (TypeError, ValueError):
+                close = 0
             price_data = {
-                'instrument_key': instrument_key,
-                'ltp': ltpc.get('ltp', 0),  # Last traded price
-                'ltq': ltpc.get('ltq', 0),  # Last traded quantity
-                'ltt': ltpc.get('ltt', ''),  # Last traded time
-                'open': market_ff.get('open', 0) if market_ff else 0,
-                'high': market_ff.get('high', 0) if market_ff else 0,
-                'low': market_ff.get('low', 0) if market_ff else 0,
-                'close': market_ff.get('close', 0) if market_ff else 0,
-                'volume': market_ff.get('volume', 0) if market_ff else 0,
-                'oi': market_ff.get('oi', 0) if market_ff else 0,  # Open interest
-                'timestamp': datetime.now().isoformat()
+                "instrument_key": instrument_key,
+                "ltp": ltpc.get("ltp") if isinstance(ltpc.get("ltp"), (int, float)) else 0,
+                "ltq": ltpc.get("ltq", 0),
+                "ltt": ltpc.get("ltt", ""),
+                "close": close,
+                "close_price": close,
+                "open": ohlc_1d.get("open", 0) if isinstance(ohlc_1d.get("open"), (int, float)) else 0,
+                "high": ohlc_1d.get("high", 0) if isinstance(ohlc_1d.get("high"), (int, float)) else 0,
+                "low": ohlc_1d.get("low", 0) if isinstance(ohlc_1d.get("low"), (int, float)) else 0,
+                "volume": ohlc_1d.get("volume", 0) or 0,
+                "oi": (market_ff.get("eFeedDetails") or {}).get("oi", 0) or 0,
+                "timestamp": datetime.now().isoformat(),
             }
-            
-            # Call all registered callbacks
+            if not isinstance(price_data["ltp"], (int, float)) or price_data["ltp"] <= 0:
+                price_data["ltp"] = close
             with self._lock:
                 for callback in self.price_callbacks:
                     try:
                         callback(instrument_key, price_data)
                     except Exception as e:
-                        logger.error(f"Error in price callback {callback.__name__}: {e}")
-                        
+                        logger.error("Error in price callback %s: %s", getattr(callback, "__name__", ""), e)
         except Exception as e:
-            logger.error(f"Error processing price update: {e}")
+            logger.error("Error processing price update: %s", e)
     
     def get_status(self) -> Dict:
         """Get current WebSocket connection status"""

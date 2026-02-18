@@ -220,7 +220,7 @@ function toggleSectoralIndices() {
 // Check Upstox connection status
 async function checkUpstoxConnection() {
     try {
-        const response = await fetch('/api/upstox/status');
+        const response = await fetch('/api/upstox/status', { credentials: 'same-origin' });
         const status = await response.json();
         
         window.upstoxConnected = !!status.connected;
@@ -1477,12 +1477,18 @@ async function loadSignals(forceStocks) {
                             ${signal.source ? `<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.5rem; text-align: right;">Source: ${signal.source}</div>` : ''}
                             ${signal.limited_history ? `<div class="limited-history-notice" style="font-size: 0.7rem; color: var(--warning-color, #f59e0b); margin-top: 0.5rem; padding: 0.25rem 0;"><i class="fas fa-info-circle"></i> Limited history (${signal.days_used || 60}+ days) — use with caution.</div>` : ''}
                             ${(typeof signalsBacktestReport !== 'undefined' && signalsBacktestReport && signalsBacktestReport.win_rate != null) ? `<div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 0.35rem;">Strategy win rate (5Y backtest): ${signalsBacktestReport.win_rate}%</div>` : ''}
+                            <div style="margin-top: 0.5rem;" onclick="event.stopPropagation()">
+                                <button type="button" class="btn-modern btn-secondary btn-sm" style="width: 100%; font-size: 0.8rem;" onclick="showReportOutcomeModal('${(ticker || '').replace(/'/g, "\\'")}', ${entryPrice})">
+                                    <i class="fas fa-flag"></i> Report exit (AI)
+                                </button>
+                            </div>
                         </div>
                     `;
                 }).join('')}
             </div>
         `;
         setSignalsLastUpdated();
+        if (typeof loadAgenticStatus === 'function') loadAgenticStatus();
     } catch (error) {
         console.error('Error loading signals:', error);
         container.innerHTML = `
@@ -1538,54 +1544,37 @@ async function showIndexSignals() {
             return;
         }
         
-        // Render signals in grid format
+        // Render index trades with strike price, entry, stop-loss, target, reasoning
         grid.innerHTML = `
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-top: 1rem;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; margin-top: 1rem;">
                 ${signals.map(signal => {
-                    const signalClass = signal.signal === 'BUY' ? 'success' : 
-                                       signal.signal === 'SELL' ? 'danger' : 'warning';
+                    const signalClass = (signal.signal === 'BUY' || signal.signal === 'STRONG_BUY') ? 'success' : 
+                                       (signal.signal === 'SELL' || signal.signal === 'STRONG_SELL') ? 'danger' : 'warning';
                     const probPercent = ((signal.probability || signal.confidence || 0) * 100).toFixed(1);
                     const entryPrice = signal.entry_level || signal.entry_price || 0;
-                    
-                    return `
-                        <div class="signal-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem;">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h5 style="margin: 0; font-weight: 700;">${signal.index_name || signal.ticker.replace('^', '').replace('.NS', '').replace('.BO', '')}</h5>
-                                <span class="badge bg-${signalClass}" style="font-size: 0.875rem; padding: 0.5rem 0.75rem;">
-                                    <i class="fas ${signal.signal === 'BUY' ? 'fa-arrow-up' : signal.signal === 'SELL' ? 'fa-arrow-down' : 'fa-pause'}"></i> ${signal.signal}
-                                </span>
-                            </div>
-                            <div style="background: var(--bg-secondary); padding: 0.75rem; border-radius: 8px; margin-bottom: 1rem;">
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Current:</span>
-                                    <span style="color: var(--text-primary); font-weight: 600;">₹${(signal.current_price || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                                </div>
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Confidence:</span>
-                                    <span style="color: var(--text-primary); font-weight: 600;">${probPercent}%</span>
-                                </div>
-                                ${signal.signal !== 'HOLD' ? `
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Entry:</span>
-                                    <span style="color: var(--text-primary);">₹${entryPrice.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                                </div>
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Stop Loss:</span>
-                                    <span style="color: #ef4444;">₹${(signal.stop_loss || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                                </div>
-                                <div style="display: flex; justify-content: space-between;">
-                                    <span style="color: var(--text-muted); font-size: 0.875rem;">Target:</span>
-                                    <span style="color: #10b981;">₹${(signal.target_1 || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                                </div>
-                                ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
-                            </div>
-                            ${signal.regime_type ? `
-                            <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-muted);">
-                                <span>${signal.regime_type}</span>
-                            </div>
-                            ` : ''}
-                        </div>
-                    `;
+                    const hasLevels = (signal.current_price > 0 && entryPrice > 0);
+                    const strike = signal.strike_atm != null ? signal.strike_atm : 0;
+                    const reasoning = signal.reasoning || signal.option_action || (signal.error || '—');
+                    const regimeHtml = signal.regime_type ? '<div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-muted);"><span>Regime: ' + signal.regime_type + '</span></div>' : '';
+                    // Build card HTML with concat to avoid nested template literal parse issues in TS
+                    const fmt = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+                    const name = signal.index_name || signal.ticker.replace('^', '').replace('.NS', '').replace('.BO', '');
+                    const icon = (signal.signal === 'BUY' || signal.signal === 'STRONG_BUY') ? 'fa-arrow-up' : (signal.signal === 'SELL' || signal.signal === 'STRONG_SELL') ? 'fa-arrow-down' : 'fa-pause';
+                    const spot = (signal.current_price || 0).toLocaleString('en-IN', fmt);
+                    const strikeBlock = strike > 0 ? '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Strike (ATM):</span><span style="color: var(--primary-color); font-weight: 600;">' + strike.toLocaleString('en-IN') + (signal.option_type ? ' (' + signal.option_label + ')' : '') + '</span></div>' : '';
+                    const levelsBlock = hasLevels && signal.signal !== 'HOLD' ? '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Where to buy / Entry:</span><span style="color: var(--text-primary); font-weight: 600;">' + entryPrice.toLocaleString('en-IN', fmt) + '</span></div><div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Stop loss:</span><span style="color: #ef4444; font-weight: 600;">' + (signal.stop_loss || 0).toLocaleString('en-IN', fmt) + '</span></div><div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Target 1:</span><span style="color: #10b981; font-weight: 600;">' + (signal.target_1 || 0).toLocaleString('en-IN', fmt) + '</span></div>' + ((signal.target_2 > 0) ? '<div style="display: flex; justify-content: space-between;"><span style="color: var(--text-muted); font-size: 0.875rem;">Target 2:</span><span style="color: #10b981;">' + (signal.target_2 || 0).toLocaleString('en-IN', fmt) + '</span></div>' : '') : '';
+                    const holdMsg = (!hasLevels && signal.signal === 'HOLD') ? '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>' : '';
+                    const optionBlock = signal.option_action ? '<div style="font-size: 0.8rem; color: var(--primary-color); margin-bottom: 0.5rem;"><i class="fas fa-info-circle"></i> ' + signal.option_action + '</div>' : '';
+                    return '<div class="signal-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem;">' +
+                        '<div class="d-flex justify-content-between align-items-center mb-3"><h5 style="margin: 0; font-weight: 700;">' + name + '</h5><span class="badge bg-' + signalClass + '" style="font-size: 0.875rem; padding: 0.5rem 0.75rem;"><i class="fas ' + icon + '"></i> ' + signal.signal + '</span></div>' +
+                        '<div style="background: var(--bg-secondary); padding: 0.75rem; border-radius: 8px; margin-bottom: 0.75rem;">' +
+                        '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Spot / Current:</span><span style="color: var(--text-primary); font-weight: 600;">' + spot + '</span></div>' +
+                        strikeBlock +
+                        '<div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;"><span style="color: var(--text-muted); font-size: 0.875rem;">Confidence:</span><span style="color: var(--text-primary); font-weight: 600;">' + probPercent + '%</span></div>' +
+                        levelsBlock + holdMsg + '</div>' +
+                        optionBlock +
+                        '<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color); font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;"><strong>Reasoning:</strong> ' + reasoning + '</div>' +
+                        regimeHtml + '</div>';
                 }).join('')}
             </div>
         `;
@@ -1649,7 +1638,10 @@ async function loadAllStocksSignals() {
             return;
         }
         
-        // Render signals similar to Adaptive Elite Signals
+        // Render signals similar to Adaptive Elite Signals (avoid nested template literals for Load More button)
+        const loadMoreBtn = data.pagination.has_more
+            ? '<button class="btn-modern btn-primary" onclick="loadMoreStocksSignals(' + (data.pagination.offset + data.pagination.limit) + ')"><i class="fas fa-arrow-down"></i> Load More</button>'
+            : '';
         let html = `
             <div style="margin-bottom: 1rem; padding: 1rem; background: var(--card-bg); border-radius: 8px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
@@ -1666,11 +1658,7 @@ async function loadAllStocksSignals() {
                         <button class="btn-modern btn-secondary" onclick="loadAllStocksSignals()" style="margin-right: 0.5rem;">
                             <i class="fas fa-sync-alt"></i> Refresh
                         </button>
-                        ${data.pagination.has_more ? `
-                        <button class="btn-modern btn-primary" onclick="loadMoreStocksSignals(${data.pagination.offset + data.pagination.limit})">
-                            <i class="fas fa-arrow-down"></i> Load More
-                        </button>
-                        ` : ''}
+                        ${loadMoreBtn}
                     </div>
                 </div>
             </div>
@@ -1723,6 +1711,11 @@ async function loadAllStocksSignals() {
                         </div>
                         ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
                     </div>
+                    <div style="margin-top: 0.5rem;">
+                        <button type="button" class="btn-modern btn-secondary btn-sm" style="width: 100%; font-size: 0.8rem;" onclick="showReportOutcomeModal(\'' + (signal.ticker || '').replace(/'/g, "\\'") + '\', ' + (signal.entry_price != null ? signal.entry_price : (signal.current_price != null ? signal.current_price : 0)) + ')">
+                            <i class="fas fa-flag"></i> Report exit (AI)
+                        </button>
+                    </div>
                 </div>
             `;
         });
@@ -1732,6 +1725,7 @@ async function loadAllStocksSignals() {
         
         // Store pagination info
         window.allStocksPagination = data.pagination;
+        if (typeof loadAgenticStatus === 'function') loadAgenticStatus();
         
     } catch (error) {
         console.error('Error loading all stocks signals:', error);
@@ -1816,12 +1810,18 @@ async function loadMoreStocksSignals(offset) {
                         </div>
                         ` : '<p style="margin: 0; color: var(--text-muted); font-size: 0.875rem;">No actionable signal</p>'}
                     </div>
+                    <div style="margin-top: 0.5rem;">
+                        <button type="button" class="btn-modern btn-secondary btn-sm" style="width: 100%; font-size: 0.8rem;" onclick="showReportOutcomeModal(\'' + (signal.ticker || '').replace(/'/g, "\\'") + '\', ' + (signal.entry_price != null ? signal.entry_price : (signal.current_price != null ? signal.current_price : 0)) + ')">
+                            <i class="fas fa-flag"></i> Report exit (AI)
+                        </button>
+                    </div>
                 `;
                 grid.appendChild(card);
             });
             
             // Update pagination
             window.allStocksPagination = data.pagination;
+            if (typeof loadAgenticStatus === 'function') loadAgenticStatus();
             
             // Update load more button if needed
             if (!data.pagination.has_more) {
@@ -1959,6 +1959,11 @@ async function loadAdaptiveEliteSignals() {
                         </button>
                     </div>
                     ` : ''}
+                    <div style="margin-top: 0.5rem;">
+                        <button type="button" class="btn-modern btn-secondary btn-sm" style="width: 100%; font-size: 0.8rem;" onclick="showReportOutcomeModal('${(signal.ticker || '').replace(/'/g, "\\'")}', ${signal.entry_price != null ? signal.entry_price : (signal.current_price != null ? signal.current_price : 0)})">
+                            <i class="fas fa-flag"></i> Report exit (AI)
+                        </button>
+                    </div>
                 </div>
             `;
         });
@@ -1966,6 +1971,7 @@ async function loadAdaptiveEliteSignals() {
         html += '</div>';
         container.innerHTML = html;
         setSignalsLastUpdated();
+        if (typeof loadAgenticStatus === 'function') loadAgenticStatus();
         
     } catch (error) {
         console.error('Error loading adaptive elite signals:', error);
@@ -2100,6 +2106,118 @@ async function oneClickTrade(ticker, signal, entryPrice, stopLoss) {
 
 window.oneClickTrade = oneClickTrade;
 
+// --- Agentic: Report outcome modal and status ---
+function showReportOutcomeModal(ticker, entryPrice) {
+    const modalEl = document.getElementById('reportOutcomeModal');
+    const tickerInput = document.getElementById('report-outcome-ticker');
+    const priceInput = document.getElementById('report-outcome-price');
+    const messageEl = document.getElementById('report-outcome-message');
+    const submitBtn = document.getElementById('report-outcome-submit');
+    if (!modalEl || !tickerInput || !priceInput) return;
+    tickerInput.value = (ticker || '').trim() || '';
+    priceInput.value = (entryPrice != null && entryPrice > 0) ? String(Number(entryPrice)) : '';
+    messageEl.style.display = 'none';
+    messageEl.className = 'small mb-0';
+    submitBtn.disabled = false;
+    const modal = new (window.bootstrap && window.bootstrap.Modal)(modalEl);
+    modal.show();
+    priceInput.focus();
+}
+
+async function submitReportOutcome() {
+    const tickerInput = document.getElementById('report-outcome-ticker');
+    const priceInput = document.getElementById('report-outcome-price');
+    const messageEl = document.getElementById('report-outcome-message');
+    const submitBtn = document.getElementById('report-outcome-submit');
+    if (!tickerInput || !priceInput) return;
+    const ticker = (tickerInput.value || '').trim();
+    const exitPrice = parseFloat(priceInput.value);
+    if (!ticker) {
+        messageEl.textContent = 'Please enter a ticker.';
+        messageEl.style.display = 'block';
+        messageEl.classList.add('text-danger');
+        return;
+    }
+    if (isNaN(exitPrice) || exitPrice <= 0) {
+        messageEl.textContent = 'Please enter a valid exit price.';
+        messageEl.style.display = 'block';
+        messageEl.classList.add('text-danger');
+        return;
+    }
+    submitBtn.disabled = true;
+    messageEl.style.display = 'none';
+    try {
+        const response = await fetch('/api/agentic/outcome', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticker: ticker, exit_price: exitPrice }),
+            credentials: 'same-origin'
+        });
+        const result = await response.json();
+        if (response.ok && !result.error) {
+            messageEl.textContent = result.resolved ? 'Outcome recorded. AI weights updated.' : 'No pending signal found for this ticker.';
+            messageEl.classList.remove('text-danger');
+            messageEl.classList.add('text-success');
+            messageEl.style.display = 'block';
+            if (typeof loadAgenticStatus === 'function') loadAgenticStatus();
+            setTimeout(function() {
+                const m = window.bootstrap && document.getElementById('reportOutcomeModal');
+                if (m && window.bootstrap.Modal.getInstance(m)) window.bootstrap.Modal.getInstance(m).hide();
+            }, 1500);
+        } else {
+            messageEl.textContent = result.error || 'Request failed.';
+            messageEl.classList.add('text-danger');
+            messageEl.style.display = 'block';
+        }
+    } catch (err) {
+        messageEl.textContent = 'Error: ' + (err.message || 'Request failed');
+        messageEl.classList.add('text-danger');
+        messageEl.style.display = 'block';
+    }
+    submitBtn.disabled = false;
+}
+
+function initReportOutcomeModal() {
+    const submitBtn = document.getElementById('report-outcome-submit');
+    if (submitBtn) submitBtn.addEventListener('click', submitReportOutcome);
+}
+
+async function loadAgenticStatus() {
+    const el = document.getElementById('agentic-status-badge');
+    if (!el) return;
+    try {
+        const response = await fetch('/api/agentic/status', { credentials: 'same-origin' });
+        const data = await response.json();
+        if (data.error) {
+            el.textContent = 'Agentic: —';
+            el.title = data.error;
+            return;
+        }
+        const pending = data.pending_signals != null ? data.pending_signals : 0;
+        el.textContent = 'Agentic: ' + pending + ' pending';
+        el.title = (data.message || '') + (data.ensemble_weights && Object.keys(data.ensemble_weights).length ? ' | Weights: ' + JSON.stringify(data.ensemble_weights) : '');
+    } catch (e) {
+        el.textContent = 'Agentic: —';
+        el.title = 'Could not load status';
+    }
+}
+
+if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('DOMContentLoaded', function() {
+        initReportOutcomeModal();
+        var signalsTab = document.getElementById('tab-signals');
+        if (signalsTab) {
+            var observer = new MutationObserver(function() {
+                if (signalsTab.classList.contains('active') && typeof loadAgenticStatus === 'function') loadAgenticStatus();
+            });
+            observer.observe(signalsTab, { attributes: true, attributeFilter: ['class'] });
+            if (signalsTab.classList.contains('active')) loadAgenticStatus();
+        }
+    });
+}
+window.showReportOutcomeModal = showReportOutcomeModal;
+window.loadAgenticStatus = loadAgenticStatus;
+
 async function loadAllSignals() {
     showNotification('Loading signals for all stocks...', 'info');
     
@@ -2215,7 +2333,12 @@ async function loadStocksUniversePage(offset) {
         if (exchange) params.set('exchange', exchange);
         if (search) params.set('search', search);
         const res = await fetch('/api/stocks/universe?' + params.toString());
-        const data = await res.json();
+        let data;
+        try {
+            data = await res.json();
+        } catch (parseErr) {
+            throw new Error('Invalid response from server. Please try again or refresh.');
+        }
         if (!res.ok) throw new Error(data.error || 'Failed to load stocks');
 
         stocksUniverseOffset = offset >= 0 ? offset : 0;
