@@ -499,25 +499,15 @@ def download_yahoo_ohlcv(
         except Exception as e:  # noqa: BLE001
             last_err = e
             df = pd.DataFrame()
+            err_str = str(e).lower()
+            err_type = type(e).__name__
+            err_module = type(e).__module__
             
-            # Check if it's YFRateLimitError first
+            # Detect rate limiting - check if it's YFRateLimitError directly first
+            is_rate_limit = False
             if YFRateLimitError and isinstance(e, YFRateLimitError):
-                _rate_limit_detected = True
-                _yahoo_rate_limit_active = True
+                is_rate_limit = True
                 logger.warning(f"YFRateLimitError caught directly for {ticker}. Will use longer backoff (30s+).")
-                err_str = str(e).lower()
-                err_type = type(e).__name__
-                logger.warning(f"Attempt {attempt}/{retries} failed for {ticker}: {e}")
-            else:
-                # General exception handling
-                err_str = str(e).lower()
-                err_type = type(e).__name__
-                err_module = type(e).__module__
-                
-                # Detect rate limiting - check exception type, name, and message
-                is_rate_limit = False
-                if YFRateLimitError and isinstance(e, YFRateLimitError):
-                    is_rate_limit = True
             elif (
                 "ratelimit" in err_str or 
                 "rate limit" in err_str or 
