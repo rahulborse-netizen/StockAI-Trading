@@ -416,6 +416,32 @@ class EliteSignalGenerator:
             
             # Flag when using shorter history (60-99 days) so UI can show a notice
             limited_history = 60 <= len(ml_df) < 100
+            # Phase 2.2: Add advanced features
+            advanced_features = {}
+            try:
+                from src.web.market_microstructure import get_microstructure_analyzer
+                from src.web.alternative_data import get_alternative_data_manager
+                from src.web.advanced_indicators import get_advanced_indicators_manager
+                
+                # Market microstructure analysis
+                microstructure = get_microstructure_analyzer()
+                micro_features = microstructure.get_microstructure_features(ticker, ohlcv.df)
+                advanced_features['microstructure'] = micro_features
+                
+                # Alternative data
+                alt_data = get_alternative_data_manager()
+                alt_features = alt_data.get_alternative_data_features(ticker)
+                advanced_features['alternative_data'] = alt_features
+                
+                # Advanced technical indicators
+                indicators = get_advanced_indicators_manager()
+                indicator_features = indicators.get_all_indicators(ohlcv.df)
+                advanced_features['indicators'] = indicator_features
+                
+                logger.info(f"[ELITE Signal] ✅ Added advanced features for {ticker}")
+            except Exception as e:
+                logger.debug(f"[ELITE Signal] Advanced features skipped for {ticker}: {e}")
+            
             # Build response
             signal_response = {
                 'ticker': ticker,
@@ -437,6 +463,7 @@ class EliteSignalGenerator:
                 'elite_system': True,
                 'limited_history': limited_history,
                 'days_used': len(ml_df),
+                'advanced_features': advanced_features,  # Phase 2.2
             }
             
             # Add multi-timeframe analysis if enabled
@@ -450,20 +477,36 @@ class EliteSignalGenerator:
                 )
                 signal_response['multi_timeframe'] = tf_analysis
             
-            # Add RL agent position management recommendation
-            try:
-                from src.web.ai_models.rl_agent import get_rl_agent, RL_AVAILABLE
-                if RL_AVAILABLE:
-                    rl_agent = get_rl_agent()
-                    if rl_agent.is_available():
-                        rl_recommendation = rl_agent.get_position_recommendation(
-                            data=ohlcv.df,
-                            current_price=current_price,
-                            entry_price=entry_level
-                        )
-                        signal_response['rl_recommendation'] = rl_recommendation
-            except Exception as e:
-                logger.debug(f"RL agent recommendation skipped: {e}")
+                # Add RL agent position management recommendation
+                try:
+                    from src.web.ai_models.rl_agent import get_rl_agent, RL_AVAILABLE
+                    if RL_AVAILABLE:
+                        rl_agent = get_rl_agent()
+                        if rl_agent.is_available():
+                            rl_recommendation = rl_agent.get_position_recommendation(
+                                data=ohlcv.df,
+                                current_price=current_price,
+                                entry_price=entry_level
+                            )
+                            signal_response['rl_recommendation'] = rl_recommendation
+                except Exception as e:
+                    logger.debug(f"RL agent recommendation skipped: {e}")
+                
+                # Phase 3.1: Add options trading signal
+                try:
+                    from src.web.options_trading import get_options_signal_generator
+                    options_generator = get_options_signal_generator()
+                    
+                    # Generate options signal (options chain can be fetched from Upstox if available)
+                    options_signal = options_generator.generate_options_signal(
+                        ticker=ticker,
+                        underlying_signal=signal_response,
+                        volatility=recent_volatility
+                    )
+                    signal_response['options_signal'] = options_signal
+                    logger.info(f"[ELITE Signal] ✅ Added options signal for {ticker}")
+                except Exception as e:
+                    logger.debug(f"Options signal generation skipped for {ticker}: {e}")
 
             # Agentic: record signal for outcome tracking (learn from errors)
             try:

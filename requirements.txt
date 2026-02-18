@@ -31,3 +31,5 @@ PyJWT>=2.8.0
 pydantic>=2.0.0
 # Advanced ML models (optional - install if needed)
 torch>=2.0.0
+# Phase 2.2 & 3.1: Advanced features and options trading
+scipy>=1.10.0
