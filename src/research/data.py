@@ -28,17 +28,28 @@ logger = logging.getLogger(__name__)
 # Rate limiter for Yahoo Finance API - throttle requests to avoid 429 errors
 _yahoo_rate_limiter_lock = threading.Lock()
 _yahoo_last_request_time = 0.0
-_yahoo_min_interval = 0.5  # Minimum 0.5 seconds between requests (2 req/sec max)
+_yahoo_min_interval = 2.0  # Minimum 2 seconds between requests (0.5 req/sec max) to avoid rate limits
+_yahoo_rate_limit_active = False  # Global flag if we're currently rate limited
 
 
 def _wait_for_rate_limit():
     """Wait if needed to respect Yahoo Finance rate limits."""
-    global _yahoo_last_request_time
+    global _yahoo_last_request_time, _yahoo_rate_limit_active
     with _yahoo_rate_limiter_lock:
-        elapsed = time.time() - _yahoo_last_request_time
-        if elapsed < _yahoo_min_interval:
-            sleep_time = _yahoo_min_interval - elapsed
-            time.sleep(sleep_time)
+        # If we're rate limited, wait longer
+        if _yahoo_rate_limit_active:
+            wait_time = 30.0  # Wait 30 seconds if rate limited
+            elapsed = time.time() - _yahoo_last_request_time
+            if elapsed < wait_time:
+                sleep_time = wait_time - elapsed
+                logger.debug(f"Rate limit active, waiting {sleep_time:.1f}s...")
+                time.sleep(sleep_time)
+        else:
+            # Normal rate limiting
+            elapsed = time.time() - _yahoo_last_request_time
+            if elapsed < _yahoo_min_interval:
+                sleep_time = _yahoo_min_interval - elapsed
+                time.sleep(sleep_time)
         _yahoo_last_request_time = time.time()
 
 
@@ -469,7 +480,9 @@ def download_yahoo_ohlcv(
             if ("ratelimit" in err_str or "rate limit" in err_str or "too many requests" in err_str or 
                 "429" in err_str or "YFRateLimitError" in err_type):
                 _rate_limit_detected = True
-                logger.warning(f"Rate limit detected for {ticker}. Will use longer backoff.")
+                global _yahoo_rate_limit_active
+                _yahoo_rate_limit_active = True
+                logger.warning(f"Rate limit detected for {ticker}. Will use longer backoff (30s+).")
             
             if "ssl" in err_str or "certificate" in err_str or "curl" in err_str or "60" in err_str:
                 _ssl_error_detected = True
@@ -500,10 +513,14 @@ def download_yahoo_ohlcv(
                 # Rate limit backoff: 30s, 60s, 90s
                 sleep_time = 30 * attempt
                 logger.warning(f"Rate limited. Waiting {sleep_time:.1f}s before retry...")
+                time.sleep(sleep_time)
+                # Reset rate limit flag after waiting (will be set again if still rate limited)
+                global _yahoo_rate_limit_active
+                _yahoo_rate_limit_active = False
             else:
                 sleep_time = retry_sleep_s * (2 ** (attempt - 1))
                 logger.info(f"Waiting {sleep_time:.1f}s before retry...")
-            time.sleep(sleep_time)
+                time.sleep(sleep_time)
     else:
         # All retries exhausted for primary ticker
         # If SSL error was detected but we haven't tried with verify=False yet, do one more attempt

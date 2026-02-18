@@ -49,7 +49,7 @@ def _generate_single_signal(ticker: str, generator, app=None):
             ctx.pop()
 
 
-def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: int = 3):
+def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: int = 2):
     """Generate and cache signals for all stocks using parallel processing."""
     global _precompute_done, _precompute_count
     tickers = stocks or DEFAULT_PRECOMPUTE_STOCKS
@@ -61,13 +61,16 @@ def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: i
         failed = 0
         start_time = time.time()
 
-        # Use ThreadPoolExecutor for parallel processing
+        # Use ThreadPoolExecutor for parallel processing with staggered start to avoid rate limits
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_ticker = {
-                executor.submit(_generate_single_signal, ticker, generator, app): ticker
-                for ticker in tickers
-            }
+            # Submit tasks with small delay between submissions to avoid hitting rate limits
+            future_to_ticker = {}
+            for i, ticker in enumerate(tickers):
+                future = executor.submit(_generate_single_signal, ticker, generator, app)
+                future_to_ticker[future] = ticker
+                # Stagger submissions by 1 second to avoid concurrent rate limit hits
+                if i < len(tickers) - 1:
+                    time.sleep(1.0)
             
             # Process completed tasks as they finish
             completed = 0
