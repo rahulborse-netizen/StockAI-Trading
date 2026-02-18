@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
-from scipy.stats import norm
 from math import log, sqrt, exp
 
 logger = logging.getLogger(__name__)
@@ -19,6 +18,15 @@ try:
     SCIPY_AVAILABLE = True
 except ImportError:
     logger.warning("scipy not available. Greeks calculation will use simplified formulas.")
+    # Define simplified norm functions if scipy not available
+    def norm_cdf(x):
+        """Simplified cumulative distribution function"""
+        return 0.5 * (1 + x / (1 + abs(x)))
+    def norm_pdf(x):
+        """Simplified probability density function"""
+        return 0.3989 * exp(-0.5 * x * x)
+    norm.cdf = norm_cdf
+    norm.pdf = norm_pdf
 
 
 class OptionsGreeks:
