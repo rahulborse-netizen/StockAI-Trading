@@ -459,6 +459,16 @@ def download_yahoo_ohlcv(
             last_err = e
             df = pd.DataFrame()
             err_str = str(e).lower()
+            err_type = type(e).__name__
+            
+            # Check for rate limiting in ValueError too
+            if ("ratelimit" in err_str or "rate limit" in err_str or "too many requests" in err_str or 
+                "429" in err_str or "YFRateLimitError" in err_type):
+                _rate_limit_detected = True
+                global _yahoo_rate_limit_active
+                _yahoo_rate_limit_active = True
+                logger.warning(f"Rate limit detected for {ticker} (ValueError). Will use longer backoff (30s+).")
+            
             if "ssl" in err_str or "certificate" in err_str or "curl" in err_str:
                 _ssl_error_detected = True
             if "No objects to concatenate" in str(e):
