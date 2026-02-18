@@ -156,12 +156,21 @@ class EliteSignalGenerator:
             Path("cache").mkdir(parents=True, exist_ok=True)
             cache_path = Path('cache') / f"{ticker.replace('^', '').replace(':', '_').replace('/', '_')}.csv"
             
-            # Try DataSourceManager first (Upstox when connected - no SSL/blocking, live data)
+            # Try DataSourceManager first (Upstox when connected - no SSL/blocking, live data, no rate limits)
             ohlcv = None
             data_hint = None
             data_source_used = None
+            
+            # Always prioritize Upstox when available (faster, no rate limits)
             try:
                 from src.web.data_source_manager import get_data_source_manager, DataSource
+                from src.web.upstox_connection import connection_manager
+                
+                # Check if Upstox is connected first
+                upstox_available = connection_manager.is_connected()
+                if upstox_available:
+                    logger.debug(f"[ELITE Signal] Upstox connected - prioritizing live data for {ticker}")
+                
                 hist_data, source_used, data_hint = get_data_source_manager().get_historical_data(
                     ticker, start_date, end_date, instrument_key_override=instrument_key_override
                 )
@@ -174,13 +183,13 @@ class EliteSignalGenerator:
                         ohlcv = OHLCV(df=df)
                         data_source_used = source_used
                         if source_used == DataSource.UPSTOX:
-                            logger.info(f"[ELITE Signal] ✅ Using Upstox LIVE data for {ticker} ({len(hist_data)} days)")
+                            logger.info(f"[ELITE Signal] ✅ Using Upstox LIVE data for {ticker} ({len(hist_data)} days) - FAST, NO RATE LIMITS")
                         else:
                             logger.info(f"[ELITE Signal] Using {source_used.name} data for {ticker} ({len(hist_data)} days)")
             except Exception as e:
                 logger.debug(f"[ELITE Signal] DataSourceManager failed for {ticker}: {e}")
             
-            # Fallback to Yahoo Finance
+            # Fallback to Yahoo Finance only if Upstox data unavailable
             if ohlcv is None:
                 from src.research.data import _is_index_ticker
                 force_refresh = False
@@ -342,6 +351,22 @@ class EliteSignalGenerator:
             except Exception as e:
                 logger.debug(f"LSTM not available or error: {e}")
             
+            # 4. Transformer (if available and enough data)
+            try:
+                from src.web.ai_models.transformer_predictor import get_transformer_predictor, TRANSFORMER_AVAILABLE
+                if TRANSFORMER_AVAILABLE and len(train_df) >= 60:
+                    transformer_model = get_transformer_predictor()
+                    if transformer_model.is_available():
+                        prob_transformer = transformer_model.predict(ml_df, feature_cols)
+                        if prob_transformer is not None:
+                            predictions['transformer'] = float(prob_transformer)
+                            model_details['transformer'] = {
+                                'type': 'transformer',
+                                'probability': float(prob_transformer)
+                            }
+            except Exception as e:
+                logger.debug(f"Transformer not available or error: {e}")
+            
             # Ensemble prediction
             if use_ensemble and len(predictions) > 1:
                 ensemble_result = self.ensemble_manager.predict_ensemble(predictions)
@@ -424,6 +449,21 @@ class EliteSignalGenerator:
                     predictions=tf_predictions
                 )
                 signal_response['multi_timeframe'] = tf_analysis
+            
+            # Add RL agent position management recommendation
+            try:
+                from src.web.ai_models.rl_agent import get_rl_agent, RL_AVAILABLE
+                if RL_AVAILABLE:
+                    rl_agent = get_rl_agent()
+                    if rl_agent.is_available():
+                        rl_recommendation = rl_agent.get_position_recommendation(
+                            data=ohlcv.df,
+                            current_price=current_price,
+                            entry_price=entry_level
+                        )
+                        signal_response['rl_recommendation'] = rl_recommendation
+            except Exception as e:
+                logger.debug(f"RL agent recommendation skipped: {e}")
 
             # Agentic: record signal for outcome tracking (learn from errors)
             try:

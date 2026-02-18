@@ -49,28 +49,63 @@ def _generate_single_signal(ticker: str, generator, app=None):
             ctx.pop()
 
 
-def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: int = 2):
-    """Generate and cache signals for all stocks using parallel processing."""
+def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: int = 3):
+    """
+    Generate and cache signals for all stocks using optimized parallel processing.
+    Prioritizes Upstox data when available to avoid Yahoo Finance rate limits.
+    """
     global _precompute_done, _precompute_count
     tickers = stocks or DEFAULT_PRECOMPUTE_STOCKS
     try:
         from src.web.ai_models.elite_signal_generator import get_elite_signal_generator
+        from src.web.signal_cache import get_cached_signal
+        from src.web.upstox_connection import connection_manager
 
         generator = get_elite_signal_generator()
         success = 0
         failed = 0
+        cached = 0
         start_time = time.time()
+        
+        # Check if Upstox is connected (prioritize live data)
+        upstox_connected = connection_manager.is_connected()
+        if upstox_connected:
+            logger.info("[Precompute] Upstox connected - using live data (faster, no rate limits)")
+            # Can use more workers when Upstox is connected (no rate limits)
+            max_workers = min(max_workers + 1, 4)
+        else:
+            logger.info("[Precompute] Upstox not connected - using Yahoo Finance (rate limited)")
 
-        # Use ThreadPoolExecutor for parallel processing with staggered start to avoid rate limits
+        # Filter out tickers that already have fresh cache
+        tickers_to_compute = []
+        for ticker in tickers:
+            cached_signal = get_cached_signal(ticker)
+            if cached_signal:
+                cached += 1
+                logger.debug(f"[Precompute] {ticker}: using cached signal")
+            else:
+                tickers_to_compute.append(ticker)
+        
+        if not tickers_to_compute:
+            logger.info(f"[Precompute] All {len(tickers)} signals already cached. Skipping computation.")
+            _precompute_done = True
+            _precompute_count = len(tickers)
+            return
+
+        logger.info(f"[Precompute] Computing {len(tickers_to_compute)} signals ({cached} already cached)")
+
+        # Use ThreadPoolExecutor for parallel processing with optimized staggering
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit tasks with small delay between submissions to avoid hitting rate limits
+            # Submit tasks with adaptive delay based on data source
             future_to_ticker = {}
-            for i, ticker in enumerate(tickers):
+            stagger_delay = 0.5 if upstox_connected else 2.0  # Faster when using Upstox
+            
+            for i, ticker in enumerate(tickers_to_compute):
                 future = executor.submit(_generate_single_signal, ticker, generator, app)
                 future_to_ticker[future] = ticker
-                # Stagger submissions by 1 second to avoid concurrent rate limit hits
-                if i < len(tickers) - 1:
-                    time.sleep(1.0)
+                # Stagger submissions to avoid rate limits (less delay with Upstox)
+                if i < len(tickers_to_compute) - 1:
+                    time.sleep(stagger_delay)
             
             # Process completed tasks as they finish
             completed = 0
@@ -78,21 +113,24 @@ def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: i
                 completed += 1
                 ticker = future_to_ticker[future]
                 try:
-                    result = future.result()
+                    result = future.result(timeout=60)  # 60s timeout per signal
                     if result['success']:
                         success += 1
-                        logger.info(f"[Precompute] {result['ticker']}: {result['signal']} ({completed}/{len(tickers)})")
+                        logger.info(f"[Precompute] {result['ticker']}: {result['signal']} ({completed}/{len(tickers_to_compute)})")
                     else:
                         failed += 1
-                        logger.debug(f"[Precompute] {result['ticker']}: skip ({result.get('error', 'error')})")
+                        error_msg = result.get('error', 'error')
+                        # Don't log rate limit errors as warnings (expected)
+                        if 'rate limit' not in str(error_msg).lower():
+                            logger.debug(f"[Precompute] {result['ticker']}: skip ({error_msg})")
                 except Exception as e:
                     failed += 1
                     logger.debug(f"[Precompute] {ticker}: {e}")
 
         elapsed = time.time() - start_time
         _precompute_done = True
-        _precompute_count = success
-        logger.info(f"[Precompute] Done in {elapsed:.1f}s. Cached {success} signals, {failed} failed/skipped.")
+        _precompute_count = success + cached
+        logger.info(f"[Precompute] Done in {elapsed:.1f}s. Cached {success} new signals, {cached} from cache, {failed} failed/skipped.")
     except Exception as e:
         logger.error(f"[Precompute] Error: {e}", exc_info=True)
 

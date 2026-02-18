@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path("data/signals")
 CACHE_FILE = CACHE_DIR / "signals_cache.json"
 CACHE_MAX_AGE_HOURS = 24  # Consider cache fresh for 24h (e.g. overnight pre-compute)
+# Extended cache for stable signals (indices, major stocks)
+STABLE_SIGNAL_CACHE_HOURS = 48  # Longer cache for indices and major stocks
 
 # Thread lock for cache writes
 _cache_lock = threading.Lock()
@@ -24,10 +26,18 @@ def _ensure_cache_dir():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_cached_signal(ticker: str, max_age_hours: float = CACHE_MAX_AGE_HOURS) -> Optional[Dict[str, Any]]:
+def get_cached_signal(ticker: str, max_age_hours: float = None) -> Optional[Dict[str, Any]]:
     """
     Get cached signal for ticker. Returns None if not cached or expired.
+    Uses longer cache TTL for stable signals (indices, major stocks).
     """
+    if max_age_hours is None:
+        # Use extended cache for indices and major stocks
+        if ticker.startswith('^') or ticker in ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS']:
+            max_age_hours = STABLE_SIGNAL_CACHE_HOURS
+        else:
+            max_age_hours = CACHE_MAX_AGE_HOURS
+    
     if not CACHE_FILE.exists():
         return None
     try:
@@ -48,13 +58,14 @@ def get_cached_signal(ticker: str, max_age_hours: float = CACHE_MAX_AGE_HOURS) -
             dt = datetime.fromisoformat(s)
             age_sec = (datetime.now() - dt).total_seconds()
             if age_sec > max_age_hours * 3600:
-                logger.debug(f"[SignalCache] Cache for {ticker} expired ({age_sec/3600:.1f}h old)")
+                logger.debug(f"[SignalCache] Cache for {ticker} expired ({age_sec/3600:.1f}h old, max: {max_age_hours}h)")
                 return None
         except Exception:
             pass
     # Return copy without internal fields
     out = {k: v for k, v in sig.items() if not k.startswith("_")}
     out["source"] = out.get("source", "cache")
+    out["_cached"] = True  # Mark as cached for frontend
     return out
 
 

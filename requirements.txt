@@ -22,3 +22,12 @@ joblib
 # ELITE AI System dependencies
 xgboost>=2.0.0
 tensorflow>=2.13.0
+# Production infrastructure
+psycopg2-binary>=2.9.0
+redis>=5.0.0
+sentry-sdk>=1.32.0
+gunicorn>=21.2.0
+PyJWT>=2.8.0
+pydantic>=2.0.0
+# Advanced ML models (optional - install if needed)
+torch>=2.0.0

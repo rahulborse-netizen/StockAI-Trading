@@ -102,7 +102,7 @@ class UpstoxWebSocketManager:
     def connect(self) -> bool:
         """
         Establish WebSocket connection to Upstox using authorized one-time URL.
-        Returns True if connection successful. Tries once with optional retry.
+        Returns True if connection successful. Enhanced retry logic with exponential backoff.
         """
         if not self.access_token:
             self.last_connect_error = "No access token"
@@ -110,33 +110,51 @@ class UpstoxWebSocketManager:
             return False
 
         self.last_connect_error = None
-        for attempt in range(2):  # initial + one retry
+        max_attempts = 3
+        base_delay = 2
+        
+        for attempt in range(max_attempts):
             if attempt > 0:
-                logger.info("Retrying WebSocket connection in 2s...")
-                time.sleep(2)
+                delay = base_delay * (2 ** (attempt - 1))  # Exponential backoff: 2s, 4s, 8s
+                logger.info(f"Retrying WebSocket connection (attempt {attempt + 1}/{max_attempts}) in {delay}s...")
+                time.sleep(delay)
+            
             ws_url = self._get_authorized_ws_url()
             if not ws_url:
-                continue
+                if attempt < max_attempts - 1:
+                    continue
+                else:
+                    self.last_connect_error = "Failed to get authorized WebSocket URL"
+                    return False
+            
             try:
                 self.connected = False
+                connection_established = threading.Event()
+                
                 # WebSocket callbacks
                 def on_open(ws):
-                    logger.info("✅ WebSocket connection opened")
+                    logger.info("✅ WebSocket connection opened successfully")
                     self.connected = True
                     self.reconnect_attempts = 0
+                    connection_established.set()
 
                 def on_message(ws, message):
-                    self._handle_message(message)
+                    try:
+                        self._handle_message(message)
+                    except Exception as e:
+                        logger.error(f"Error handling WebSocket message: {e}")
 
                 def on_error(ws, error):
                     err_str = str(error) if error else "unknown"
                     logger.error("❌ WebSocket error: %s", err_str)
                     self.last_connect_error = err_str[:200]
+                    connection_established.set()  # Unblock wait even on error
 
                 def on_close(ws, close_status_code, close_msg):
                     logger.warning("WebSocket closed: %s - %s", close_status_code, close_msg)
                     self.connected = False
                     if not self._stop_flag.is_set():
+                        # Only auto-reconnect if not manually stopped
                         self._attempt_reconnect()
 
                 self.ws = websocket.WebSocketApp(
@@ -146,18 +164,33 @@ class UpstoxWebSocketManager:
                     on_error=on_error,
                     on_close=on_close
                 )
+                
                 self._ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
                 self._ws_thread.start()
-                # Wait for connection (max 10 seconds)
-                for _ in range(100):
+                
+                # Wait for connection with timeout (15 seconds)
+                if connection_established.wait(timeout=15):
                     if self.connected:
+                        logger.info("✅ WebSocket connection established and verified")
                         return True
-                    time.sleep(0.1)
-                self.last_connect_error = "Connection timeout (10s)"
-                logger.warning("WebSocket connection timeout")
+                    else:
+                        logger.warning("WebSocket connection attempt failed")
+                else:
+                    self.last_connect_error = "Connection timeout (15s)"
+                    logger.warning("WebSocket connection timeout after 15s")
+                    # Clean up failed connection
+                    try:
+                        if self.ws:
+                            self.ws.close()
+                    except:
+                        pass
+                    
             except Exception as e:
                 self.last_connect_error = str(e)[:200]
-                logger.error("Error connecting to WebSocket: %s", e)
+                logger.error(f"Error connecting to WebSocket (attempt {attempt + 1}): {e}")
+                if attempt < max_attempts - 1:
+                    continue
+        
         return False
     
     def _run_websocket(self):
@@ -168,17 +201,25 @@ class UpstoxWebSocketManager:
             logger.error(f"WebSocket run_forever error: {e}")
     
     def _attempt_reconnect(self):
-        """Attempt to reconnect to WebSocket"""
+        """Attempt to reconnect to WebSocket with exponential backoff"""
         if self.reconnect_attempts >= self.max_reconnect_attempts:
-            logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached")
+            logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached. WebSocket will not auto-reconnect.")
             return
-            
-        self.reconnect_attempts += 1
-        logger.info(f"Attempting reconnect #{self.reconnect_attempts} in {self.reconnect_delay} seconds...")
-        time.sleep(self.reconnect_delay)
         
-        if not self._stop_flag.is_set():
-            self.connect()
+        self.reconnect_attempts += 1
+        # Exponential backoff: 5s, 10s, 20s, 40s, 80s
+        delay = self.reconnect_delay * (2 ** (self.reconnect_attempts - 1))
+        logger.info(f"Attempting reconnect #{self.reconnect_attempts}/{self.max_reconnect_attempts} in {delay} seconds...")
+        time.sleep(delay)
+        
+        if not self._stop_flag.is_set() and self.access_token:
+            success = self.connect()
+            if success:
+                logger.info("✅ WebSocket reconnected successfully")
+                # Re-subscribe to previously subscribed instruments
+                if self.subscribed_instruments:
+                    logger.info(f"Re-subscribing to {len(self.subscribed_instruments)} instruments...")
+                    self.subscribe_instruments(list(self.subscribed_instruments))
     
     def disconnect(self):
         """Close WebSocket connection"""
@@ -436,6 +477,25 @@ def init_websocket_handlers(socketio_instance):
     
     # Register broadcast callback
     ws_manager.add_price_callback(broadcast_price_update)
+    
+    # Register real-time signal manager callback
+    try:
+        from src.web.realtime_signal_manager import get_realtime_signal_manager
+        signal_manager = get_realtime_signal_manager()
+        
+        def update_signal_on_price(instrument_key: str, price_data: dict):
+            """Update signal when price changes"""
+            try:
+                ticker = get_ticker_for_key(instrument_key)
+                if ticker:
+                    signal_manager.on_price_update(ticker, price_data, instrument_key)
+            except Exception as e:
+                logger.debug(f"Signal update on price change skipped: {e}")
+        
+        ws_manager.add_price_callback(update_signal_on_price)
+        logger.info("[WebSocket] Registered real-time signal update callback")
+    except Exception as e:
+        logger.debug(f"Real-time signal manager not available: {e}")
     
     @socketio_instance.on('connect')
     def handle_connect():

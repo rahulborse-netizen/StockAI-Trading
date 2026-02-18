@@ -325,6 +325,7 @@ class DataSourceManager:
     def get_historical_data(self, symbol: str, start_date: str, end_date: str, instrument_key_override: Optional[str] = None) -> Tuple[Optional[List[Dict]], DataSource, Optional[str]]:
         """
         Get historical data from best available source
+        Prioritizes Upstox when connected to avoid Yahoo Finance rate limits.
         
         Args:
             symbol: Stock symbol or index ticker (e.g., 'RELIANCE.NS', '^NSEI')
@@ -336,6 +337,9 @@ class DataSourceManager:
             Tuple of (historical_data, source_used, error_hint) or (None, None, hint) if all sources fail
         """
         last_hint: Optional[str] = "Historical data unavailable for this ticker"
+        
+        # Always try Upstox first when connected (no rate limits, faster)
+        upstox_client = self._get_upstox_client()
         
         # For index tickers (^NSEI, ^NSEBANK, etc.), try get_index_data first
         if symbol.startswith('^') or symbol.upper() in ['NSEI', 'NSEBANK', 'BSESN', 'INDIAVIX']:
@@ -396,11 +400,10 @@ class DataSourceManager:
                                     if records:
                                         logger.info(f"✅ Got {len(records)} historical candles for {symbol} (index) from Upstox (LIVE DATA)")
                                         return records, DataSource.UPSTOX, None
-                except Exception as e:
-                    logger.debug(f"Upstox index historical failed for {symbol}: {e}")
+            except Exception as e:
+                logger.debug(f"Upstox index historical failed for {symbol}: {e}")
         
-        # Try Upstox first (when connected) - no SSL/blocking issues
-        upstox_client = self._get_upstox_client()
+        # Try Upstox for stocks (when connected) - no SSL/blocking issues, no rate limits
         if upstox_client and upstox_client.access_token:
             try:
                 from urllib.parse import quote

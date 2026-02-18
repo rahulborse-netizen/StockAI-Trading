@@ -34,9 +34,18 @@ import socket
 
 from dotenv import load_dotenv
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Load configuration
+from src.web.config import get_config
+config = get_config()
+
+# Setup structured logging
+from src.web.logging_config import setup_logging
+setup_logging(log_level=config.LOG_LEVEL, log_dir=config.LOG_DIR)
 logger = logging.getLogger(__name__)
+
+# Initialize error tracking (Sentry)
+from src.web.error_tracking import init_error_tracking
+init_error_tracking()
 
 from src.research.data import download_yahoo_ohlcv, load_cached_csv
 from src.research.features import make_features, add_label_forward_return_up, clean_ml_frame
@@ -90,6 +99,19 @@ from src.web.ai_models.advanced_features import make_advanced_features, get_adva
 # Load environment variables (optional .env)
 load_dotenv()
 
+# Load configuration
+from src.web.config import get_config
+config = get_config()
+
+# Setup structured logging with config
+from src.web.logging_config import setup_logging
+setup_logging(log_level=config.LOG_LEVEL, log_dir=config.LOG_DIR)
+logger = logging.getLogger(__name__)
+
+# Initialize error tracking (Sentry)
+from src.web.error_tracking import init_error_tracking
+init_error_tracking()
+
 # Get the directory where this file is located
 web_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(web_dir, 'templates')
@@ -98,13 +120,16 @@ static_dir = os.path.join(web_dir, 'static')
 app = Flask(__name__, 
             template_folder=template_dir,
             static_folder=static_dir)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")  # Set FLASK_SECRET_KEY in production
 
-# Configure session to persist
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)  # Sessions last 7 days
-app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production with HTTPS
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# Apply configuration
+app.config.from_object(config)
+app.secret_key = config.SECRET_KEY
+
+# Update session config from config object
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(seconds=config.PERMANENT_SESSION_LIFETIME)
+app.config['SESSION_COOKIE_SECURE'] = config.SESSION_COOKIE_SECURE
+app.config['SESSION_COOKIE_HTTPONLY'] = config.SESSION_COOKIE_HTTPONLY
+app.config['SESSION_COOKIE_SAMESITE'] = config.SESSION_COOKIE_SAMESITE
 
 # Phase 2.1: Initialize Flask-SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -145,31 +170,35 @@ upstox_api = None  # legacy global; use connection_manager instead
 # Paper trading mode (can be toggled via environment variable or session)
 PAPER_TRADING_MODE = os.getenv('PAPER_TRADING_MODE', 'false').lower() == 'true'
 
-# Error handlers to ensure API routes always return JSON
+# Error handlers with Sentry integration
 @app.errorhandler(404)
 def not_found(error):
-    """Handle 404 errors - return JSON for API routes, HTML for others"""
-    if request.path.startswith('/api/'):
+    """Handle 404 errors"""
+    from src.web.error_tracking import capture_message
+    capture_message(f"404 Not Found: {request.path}", level='warning')
+    if request.path.startswith('/api'):
         return jsonify({'status': 'error', 'message': 'API endpoint not found'}), 404
-    return render_template('dashboard.html'), 404
+    return render_template('404.html'), 404
 
 @app.errorhandler(500)
 def internal_error(error):
-    """Handle 500 errors - return JSON for API routes"""
-    logger.error(f"Internal server error: {error}")
-    if request.path.startswith('/api/'):
-        return jsonify({
-            'status': 'error', 
-            'message': 'Internal server error. Check Flask server logs for details.',
-            'error_type': 'InternalServerError'
-        }), 500
-    return f'<h1>Internal Server Error</h1><p>Check Flask server logs for details.</p>', 500
+    """Handle 500 errors"""
+    from src.web.error_tracking import capture_exception
+    capture_exception(error, path=request.path, method=request.method)
+    if request.path.startswith('/api'):
+        return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
+    return render_template('500.html'), 500
 
 @app.errorhandler(Exception)
-def handle_exception(error):
-    """Handle all exceptions - return JSON for API routes"""
-    logger.error(f"Unhandled exception: {error}", exc_info=True)
-    if request.path.startswith('/api/'):
+def handle_exception(e):
+    """Handle all unhandled exceptions"""
+    from src.web.error_tracking import capture_exception
+    capture_exception(e, path=request.path, method=request.method)
+    if request.path.startswith('/api'):
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    raise e
+
+# Error handlers are defined above with Sentry integration - duplicates removed
         return jsonify({
             'status': 'error',
             'message': f'Server error: {str(error)}',
@@ -491,12 +520,25 @@ def get_chart_data(ticker):
         return jsonify({'error': f'Failed to load chart data: {str(e)}'}), 500
 
 @app.route('/api/signals/<path:ticker>')
+@app.route('/api/v1/signals/<path:ticker>')
 def get_signals(ticker):
     """
     Get trading signals for a ticker using ELITE AI system
     Phase 3: Enhanced with ensemble models and advanced features
     Query params: ?elite=true (default), ?generate_plan=true, ?trading_type=swing
+    
+    API Version: v1
+    Rate Limit: 60 requests/minute
     """
+    # Apply rate limiting
+    try:
+        from src.web.api.rate_limit import rate_limit
+        return rate_limit(limit=60, window=60)(_get_signals_impl)(ticker)
+    except ImportError:
+        # Fallback if rate limiting not available
+        return _get_signals_impl(ticker)
+
+def _get_signals_impl(ticker):
     try:
         # Decode URL-encoded ticker (handles %5E for ^, etc.)
         from urllib.parse import unquote
@@ -531,12 +573,14 @@ def get_signals(ticker):
         logger.info(f"[Signals] ticker={ticker} instrument_key={'provided' if instrument_key else 'none'}")
         
         # Serve from pre-computed cache first (unless refresh requested)
+        # Use extended cache for stable signals (indices, major stocks)
         if not force_refresh:
             try:
                 from src.web.signal_cache import get_cached_signal
+                # Use longer cache for indices and major stocks
                 cached = get_cached_signal(ticker)
                 if cached:
-                    logger.debug(f"[Signals] Serving {ticker} from cache")
+                    logger.debug(f"[Signals] ✅ Serving {ticker} from cache (fast response)")
                     return jsonify(cached)
             except Exception as cache_err:
                 logger.debug(f"[Signals] Cache check failed: {cache_err}")
@@ -552,16 +596,29 @@ def get_signals(ticker):
         except Exception as sub_err:
             logger.debug(f"[Signals] Subscription check skipped: {sub_err}")
         
-        # Use ELITE signal generator if enabled
+        # Use Enhanced signal generator (prioritizes live data for accuracy)
         if use_elite:
             try:
-                elite_generator = get_elite_signal_generator()
-                signal_response = elite_generator.generate_signal(
-                    ticker=ticker,
-                    use_ensemble=True,
-                    use_multi_timeframe=True,
-                    instrument_key_override=instrument_key
-                )
+                # Try enhanced generator first (better accuracy with live data)
+                try:
+                    from src.web.ai_models.enhanced_signal_generator import get_enhanced_signal_generator
+                    generator = get_enhanced_signal_generator()
+                    signal_response = generator.generate_signal(
+                        ticker=ticker,
+                        use_ensemble=True,
+                        use_multi_timeframe=True,
+                        instrument_key_override=instrument_key,
+                        use_live_data=True  # Prioritize live data
+                    )
+                except ImportError:
+                    # Fallback to standard ELITE generator
+                    elite_generator = get_elite_signal_generator()
+                    signal_response = elite_generator.generate_signal(
+                        ticker=ticker,
+                        use_ensemble=True,
+                        use_multi_timeframe=True,
+                        instrument_key_override=instrument_key
+                    )
                 
                 # Check if signal_response is valid
                 if signal_response and 'error' not in signal_response:
@@ -803,6 +860,8 @@ def get_signals(ticker):
         return jsonify(signal_response)
         
     except Exception as e:
+        from src.web.error_tracking import capture_exception
+        capture_exception(e, ticker=ticker, path=request.path)
         error_msg = f'Error generating signals for {ticker}: {str(e)}'
         logger.error(f"[Signals] {error_msg}", exc_info=True)
         import traceback
@@ -880,6 +939,129 @@ def get_model_rankings():
         logger.error(f"Error getting model rankings: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/realtime-signals/<path:ticker>', methods=['GET'])
+def get_realtime_signal(ticker):
+    """
+    Get real-time updated signal for a ticker.
+    Returns the latest signal with current market price and updated strike prices.
+    """
+    try:
+        from urllib.parse import unquote
+        ticker = unquote(ticker)
+        
+        from src.web.realtime_signal_manager import get_realtime_signal_manager
+        signal_manager = get_realtime_signal_manager()
+        
+        # Get current signal (may be cached or need to fetch)
+        signal = signal_manager.get_signal(ticker)
+        
+        if not signal:
+            # Generate initial signal
+            from src.web.ai_models.elite_signal_generator import get_elite_signal_generator
+            from src.web.data_source_manager import get_data_source_manager
+            
+            dsm = get_data_source_manager()
+            quote, source = dsm.get_quote(ticker)
+            current_price = quote.get('price') or quote.get('ltp') or quote.get('current_price') or 0 if quote else 0
+            
+            if current_price > 0:
+                signal = signal_manager.update_signal(ticker, current_price)
+            else:
+                # Try to get signal from cache or generate new one
+                try:
+                    from src.web.signal_cache import get_cached_signal
+                    cached = get_cached_signal(ticker)
+                    if cached and cached.get('current_price'):
+                        current_price = cached.get('current_price')
+                        signal = signal_manager.update_signal(ticker, current_price)
+                    else:
+                        # Generate signal without current price - it will use historical data
+                        elite_generator = get_elite_signal_generator()
+                        signal_response = elite_generator.generate_signal(
+                            ticker=ticker,
+                            use_ensemble=True,
+                            use_multi_timeframe=True
+                        )
+                        if signal_response and 'error' not in signal_response:
+                            current_price = signal_response.get('current_price') or signal_response.get('close') or 0
+                            if current_price > 0:
+                                signal = signal_manager.update_signal(ticker, current_price)
+                            else:
+                                signal = signal_response
+                except Exception as e:
+                    logger.debug(f"Error generating signal for {ticker}: {e}")
+                    return jsonify({'error': f'Unable to get signal for {ticker}: {str(e)}'}), 404
+                
+                if not signal:
+                    return jsonify({'error': f'Unable to get current price or signal for {ticker}'}), 404
+        
+        return jsonify(signal)
+    except Exception as e:
+        logger.error(f"Error getting real-time signal for {ticker}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/realtime-signals/trade/register', methods=['POST'])
+def register_trade():
+    """
+    Register an active trade for real-time tracking.
+    Body: {ticker, entry_price, stop_loss, target_1, target_2, type: 'LONG'|'SHORT'}
+    """
+    try:
+        data = request.get_json()
+        ticker = data.get('ticker')
+        if not ticker:
+            return jsonify({'error': 'ticker is required'}), 400
+        
+        trade_details = {
+            'entry_price': float(data.get('entry_price', 0)),
+            'stop_loss': float(data.get('stop_loss', 0)),
+            'target_1': float(data.get('target_1', 0)),
+            'target_2': float(data.get('target_2', 0)),
+            'type': data.get('type', 'LONG').upper(),
+            'registered_at': datetime.now().isoformat()
+        }
+        
+        from src.web.realtime_signal_manager import get_realtime_signal_manager
+        signal_manager = get_realtime_signal_manager()
+        signal_manager.register_trade(ticker, trade_details)
+        
+        return jsonify({'success': True, 'ticker': ticker, 'trade': trade_details})
+    except Exception as e:
+        logger.error(f"Error registering trade: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/realtime-signals/trade/<path:ticker>', methods=['DELETE'])
+def unregister_trade(ticker):
+    """Unregister an active trade"""
+    try:
+        from urllib.parse import unquote
+        ticker = unquote(ticker)
+        
+        from src.web.realtime_signal_manager import get_realtime_signal_manager
+        signal_manager = get_realtime_signal_manager()
+        signal_manager.unregister_trade(ticker)
+        
+        return jsonify({'success': True, 'ticker': ticker})
+    except Exception as e:
+        logger.error(f"Error unregistering trade: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/realtime-signals/trades', methods=['GET'])
+def get_active_trades():
+    """Get all active trades being tracked"""
+    try:
+        from src.web.realtime_signal_manager import get_realtime_signal_manager
+        signal_manager = get_realtime_signal_manager()
+        trades = signal_manager.get_active_trades()
+        return jsonify({'trades': trades})
+    except Exception as e:
+        logger.error(f"Error getting active trades: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/index-signals')
 def get_all_index_signals():
     """Get trading signals for Nifty 50, Bank Nifty, Sensex with strike price, entry, stop-loss, and reasoning."""
@@ -890,7 +1072,15 @@ def get_all_index_signals():
         {'name': 'Sensex', 'ticker': '^BSESN', 'key': 'sensex'},
     ]
     results = []
-    elite_generator = get_elite_signal_generator()
+    # Use enhanced generator for better accuracy (prioritizes live data)
+    try:
+        from src.web.ai_models.enhanced_signal_generator import get_enhanced_signal_generator
+        elite_generator = get_enhanced_signal_generator()
+        use_enhanced = True
+    except ImportError:
+        elite_generator = get_elite_signal_generator()
+        use_enhanced = False
+    
     try:
         from src.web.index_signals import enhance_index_signal
     except ImportError:
@@ -902,17 +1092,37 @@ def get_all_index_signals():
     def _process_index(index):
         """Process a single index signal."""
         try:
+            # Try to get real-time signal first
+            from src.web.realtime_signal_manager import get_realtime_signal_manager
+            signal_manager = get_realtime_signal_manager()
+            realtime_signal = signal_manager.get_signal(index['ticker'])
+            
+            if realtime_signal:
+                # Use real-time signal if available
+                return index, realtime_signal, None
+            
+            # Fallback to cache or generate new (use enhanced generator for better accuracy)
             from src.web.signal_cache import get_cached_signal
             cached = get_cached_signal(index['ticker'])
             if cached:
                 return index, cached, None
             else:
-                signal_response = elite_generator.generate_signal(
-                    ticker=index['ticker'],
-                    use_ensemble=True,
-                    use_multi_timeframe=False,
-                    instrument_key_override=None
-                )
+                # Use enhanced generator if available (already initialized above)
+                if use_enhanced:
+                    signal_response = elite_generator.generate_signal(
+                        ticker=index['ticker'],
+                        use_ensemble=True,
+                        use_multi_timeframe=False,
+                        instrument_key_override=None,
+                        use_live_data=True
+                    )
+                else:
+                    signal_response = elite_generator.generate_signal(
+                        ticker=index['ticker'],
+                        use_ensemble=True,
+                        use_multi_timeframe=False,
+                        instrument_key_override=None
+                    )
                 return index, signal_response, None
         except Exception as e:
             return index, None, e
@@ -1532,16 +1742,21 @@ def start_stream():
 
         # Connect to Upstox WebSocket if not already connected
         if not ws_manager.is_connected():
+            logger.info("[WebSocket] Attempting to connect to Upstox WebSocket...")
             success = ws_manager.connect()
             if not success:
-                reason = getattr(ws_manager, 'get_last_connect_error', lambda: None)() or 'Connection failed'
+                reason = ws_manager.get_last_connect_error() or 'Connection failed'
+                logger.warning(f"[WebSocket] Connection failed: {reason}")
                 # Return 200 so frontend doesn't treat as fatal; dashboard can still use REST for indices/prices
                 return jsonify({
                     'status': 'stream_unavailable',
                     'message': 'Live stream unavailable. Using REST for indices and prices.',
                     'reason': reason,
-                    'subscribed_instruments': []
+                    'subscribed_instruments': [],
+                    'upstox_connected': connection_manager.is_connected() if connection_manager else False
                 }), 200
+            else:
+                logger.info("[WebSocket] ✅ Successfully connected to Upstox WebSocket")
 
         # Convert tickers to instrument keys; use shared instrument master
         instrument_master = get_instrument_master()
@@ -1838,21 +2053,112 @@ def remove_alert():
     return jsonify({'status': 'error', 'message': 'Alert ID required'}), 400
 
 @app.route('/api/health', methods=['GET'])
+@app.route('/api/v1/health', methods=['GET'])
 def api_health():
-    """Health/readiness: ok, upstox connected, signal cache count. Use for 'is the app up and usable?' checks."""
+    """
+    Enhanced health check endpoint
+    Returns comprehensive health status including database, Redis, and external services
+    """
+    health_status = {
+        'ok': True,
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'version': os.getenv('APP_VERSION', '1.0.0'),
+        'services': {}
+    }
+    
     try:
-        upstox = connection_manager.is_connected()
-        from src.web.signal_cache import get_cache_meta
-        meta = get_cache_meta()
-        cache_count = meta.get('count', 0)
-        return jsonify({
-            'ok': True,
-            'upstox': upstox,
-            'cache_count': cache_count,
-        })
+        # Check Upstox connection
+        try:
+            upstox_connected = connection_manager.is_connected()
+            health_status['services']['upstox'] = {
+                'status': 'connected' if upstox_connected else 'disconnected',
+                'healthy': upstox_connected
+            }
+        except Exception as e:
+            health_status['services']['upstox'] = {
+                'status': 'error',
+                'healthy': False,
+                'error': str(e)
+            }
+        
+        # Check database
+        try:
+            from src.web.database import init_database, USE_POSTGRES
+            db_healthy = init_database()
+            health_status['services']['database'] = {
+                'status': 'connected' if db_healthy else 'disconnected',
+                'healthy': db_healthy,
+                'type': 'postgresql' if USE_POSTGRES else 'sqlite'
+            }
+        except Exception as e:
+            health_status['services']['database'] = {
+                'status': 'error',
+                'healthy': False,
+                'error': str(e)
+            }
+        
+        # Check Redis (if configured)
+        try:
+            redis_url = os.getenv('REDIS_URL', '')
+            if redis_url:
+                import redis
+                r = redis.from_url(redis_url)
+                r.ping()
+                health_status['services']['redis'] = {
+                    'status': 'connected',
+                    'healthy': True
+                }
+            else:
+                health_status['services']['redis'] = {
+                    'status': 'not_configured',
+                    'healthy': True
+                }
+        except Exception as e:
+            health_status['services']['redis'] = {
+                'status': 'error',
+                'healthy': False,
+                'error': str(e)
+            }
+        
+        # Check signal cache
+        try:
+            from src.web.signal_cache import get_cache_meta
+            meta = get_cache_meta()
+            cache_count = meta.get('count', 0)
+            health_status['services']['signal_cache'] = {
+                'status': 'ok',
+                'healthy': True,
+                'cache_count': cache_count
+            }
+        except Exception as e:
+            health_status['services']['signal_cache'] = {
+                'status': 'error',
+                'healthy': False,
+                'error': str(e)
+            }
+        
+        # Determine overall health
+        all_healthy = all(
+            service.get('healthy', False) 
+            for service in health_status['services'].values()
+        )
+        
+        if not all_healthy:
+            health_status['ok'] = False
+            health_status['status'] = 'degraded'
+        
+        status_code = 200 if health_status['ok'] else 503
+        return jsonify(health_status), status_code
+        
     except Exception as e:
         logger.exception("Health check failed")
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return jsonify({
+            'ok': False,
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 
 @app.route('/api/upstox/test', methods=['GET'])
@@ -5003,6 +5309,75 @@ def _log_startup():
         logger.info("[Startup] Signal pre-computation started in background")
     except Exception as e:
         logger.debug(f"[Startup] Signal precompute startup skipped: {e}")
+    
+    # Auto-connect WebSocket if Upstox is connected
+    try:
+        import threading
+        import time
+        from src.web.upstox_connection import connection_manager
+        from src.web.websocket_server import get_ws_manager
+        if connection_manager.is_connected():
+            client = connection_manager.get_client()
+            if client and client.access_token:
+                ws_manager = get_ws_manager()
+                ws_manager.set_access_token(client.access_token)
+                # Try to connect in background (non-blocking)
+                def _auto_connect_ws():
+                    time.sleep(2)  # Wait 2 seconds for server to fully start
+                    if ws_manager.connect():
+                        logger.info("[Startup] ✅ WebSocket auto-connected successfully")
+                    else:
+                        logger.debug(f"[Startup] WebSocket auto-connect skipped: {ws_manager.get_last_connect_error()}")
+                
+                threading.Thread(target=_auto_connect_ws, daemon=True).start()
+                logger.info("[Startup] WebSocket auto-connect initiated (background)")
+    except Exception as e:
+        logger.debug(f"[Startup] WebSocket auto-connect skipped: {e}")
+    
+    # Initialize database
+    try:
+        from src.web.database import init_database
+        if init_database():
+            logger.info("[Startup] ✅ Database initialized successfully")
+        else:
+            logger.warning("[Startup] ⚠️ Database initialization failed")
+    except Exception as e:
+        logger.warning(f"[Startup] Database initialization skipped: {e}")
+    
+    # Initialize real-time signal manager
+    try:
+        from src.web.realtime_signal_manager import get_realtime_signal_manager
+        signal_manager = get_realtime_signal_manager()
+        logger.info("[Startup] ✅ Real-time signal manager initialized")
+    except Exception as e:
+        logger.debug(f"[Startup] Real-time signal manager initialization skipped: {e}")
+    
+    # Initialize enhanced signal generator for better accuracy
+    try:
+        from src.web.ai_models.enhanced_signal_generator import get_enhanced_signal_generator
+        enhanced_gen = get_enhanced_signal_generator()
+        logger.info("[Startup] ✅ Enhanced signal generator initialized (live data prioritized)")
+    except Exception as e:
+        logger.debug(f"[Startup] Enhanced signal generator initialization skipped: {e}")
+    
+    # Start background signal refresh service
+    try:
+        from src.web.signal_refresh import get_signal_refresh_service
+        refresh_service = get_signal_refresh_service()
+        # Priority tickers: indices and major stocks (refresh more frequently)
+        priority_tickers = ['^NSEI', '^NSEBANK', '^BSESN', 'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS']
+        refresh_service.start(priority_tickers=priority_tickers)
+        logger.info("[Startup] ✅ Background signal refresh service started")
+    except Exception as e:
+        logger.debug(f"[Startup] Signal refresh service initialization skipped: {e}")
+    
+    # Register OpenAPI documentation routes
+    try:
+        from src.web.api.openapi import register_openapi_routes
+        register_openapi_routes(app)
+        logger.info("[Startup] ✅ OpenAPI documentation registered at /api/docs")
+    except Exception as e:
+        logger.debug(f"[Startup] OpenAPI registration skipped: {e}")
 
 
 _log_startup()

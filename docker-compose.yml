@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stockai-web
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_PORT=5000
+      - DATABASE_URL=postgresql://stockai:stockai@postgres:5432/stockai
+      - REDIS_URL=redis://redis:6379/0
+      - UPSTOX_API_KEY=${UPSTOX_API_KEY:-}
+      - UPSTOX_API_SECRET=${UPSTOX_API_SECRET:-}
+      - UPSTOX_REDIRECT_URI=${UPSTOX_REDIRECT_URI:-http://localhost:5000/callback}
+    volumes:
+      - ./data:/app/data
+      - ./cache:/app/cache
+      - ./logs:/app/data/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - stockai-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: stockai-postgres
+    environment:
+      - POSTGRES_USER=stockai
+      - POSTGRES_PASSWORD=stockai
+      - POSTGRES_DB=stockai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - stockai-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: stockai-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - stockai-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: stockai-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - web
+    restart: unless-stopped
+    networks:
+      - stockai-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  stockai-network:
+    driver: bridge

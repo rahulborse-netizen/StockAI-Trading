@@ -1580,6 +1580,16 @@ async function showIndexSignals() {
         `;
         setSignalsLastUpdated();
         
+        // Register for real-time signal updates
+        if (window.wsClient && window.wsClient.socket && window.wsClient.socket.connected) {
+            // Listen for signal updates
+            window.wsClient.socket.on('signal_update', (data) => {
+                if (data && data.ticker) {
+                    updateSignalCard(data.ticker, data.signal);
+                }
+            });
+        }
+        
     } catch (error) {
         console.error('Error loading index signals:', error);
         const msg = error.name === 'AbortError' || (error.message && error.message.includes('timeout'))
@@ -2372,6 +2382,162 @@ function addToWatchlistFromUniverse(ticker) {
         fetch('/api/watchlist/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker: ticker }) })
             .then(r => r.json()).then(d => { if (d.error) showNotification(d.error, 'error'); else showNotification('Added ' + ticker, 'success'); });
     }
+}
+
+// Real-time signal update function
+function updateSignalCard(ticker, signalData) {
+    const cards = document.querySelectorAll('.signal-card');
+    cards.forEach(card => {
+        const cardTicker = card.getAttribute('data-ticker');
+        if (cardTicker === ticker) {
+            // Update the card with new signal data
+            const signal = signalData.signal || 'HOLD';
+            const currentPrice = signalData.current_price || 0;
+            const strike = signalData.strike_atm || 0;
+            
+            // Update price display
+            const priceEl = card.querySelector('[data-price]');
+            if (priceEl) {
+                priceEl.textContent = currentPrice.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            }
+            
+            // Update strike price
+            const strikeEl = card.querySelector('[data-strike]');
+            if (strikeEl && strike > 0) {
+                strikeEl.textContent = strike.toLocaleString('en-IN');
+            }
+            
+            // Update signal badge
+            const badgeEl = card.querySelector('.badge');
+            if (badgeEl) {
+                const signalClass = (signal === 'BUY' || signal === 'STRONG_BUY') ? 'success' : 
+                                   (signal === 'SELL' || signal === 'STRONG_SELL') ? 'danger' : 'warning';
+                badgeEl.className = `badge bg-${signalClass}`;
+                badgeEl.innerHTML = `<i class="fas ${signal === 'BUY' || signal === 'STRONG_BUY' ? 'fa-arrow-up' : signal === 'SELL' || signal === 'STRONG_SELL' ? 'fa-arrow-down' : 'fa-pause'}"></i> ${signal}`;
+            }
+            
+            // Add live indicator
+            if (!card.querySelector('.live-indicator')) {
+                const liveEl = document.createElement('small');
+                liveEl.className = 'live-indicator text-success';
+                liveEl.style.cssText = 'font-size: 0.65rem; margin-left: 0.5rem;';
+                liveEl.innerHTML = '<i class="fas fa-circle"></i> Live';
+                if (badgeEl) {
+                    badgeEl.appendChild(liveEl);
+                }
+            }
+            
+            // Update trade recommendations if available
+            if (signalData.trade_recommendations && signalData.trade_recommendations.length > 0) {
+                let recEl = card.querySelector('.trade-recommendations');
+                if (!recEl) {
+                    recEl = document.createElement('div');
+                    recEl.className = 'trade-recommendations';
+                    recEl.style.cssText = 'margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-secondary); border-radius: 8px; border-left: 3px solid var(--primary-color);';
+                    card.appendChild(recEl);
+                }
+                recEl.innerHTML = '<strong style="font-size: 0.875rem;">Trade Updates:</strong><ul style="margin: 0.5rem 0 0 1.25rem; font-size: 0.8rem;">' +
+                    signalData.trade_recommendations.map(rec => `<li>${rec}</li>`).join('') + '</ul>';
+            }
+        }
+    });
+}
+
+// Register trade for real-time tracking
+async function registerTrade(ticker, entryPrice, stopLoss, target1, target2, tradeType = 'LONG') {
+    try {
+        const response = await fetch('/api/realtime-signals/trade/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker: ticker,
+                entry_price: parseFloat(entryPrice),
+                stop_loss: parseFloat(stopLoss),
+                target_1: parseFloat(target1),
+                target_2: parseFloat(target2),
+                type: tradeType.toUpperCase()
+            })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            showNotification(`Trade registered for ${ticker}`, 'success');
+            return true;
+        } else {
+            showNotification(data.error || 'Failed to register trade', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error registering trade:', error);
+        showNotification('Error registering trade', 'error');
+        return false;
+    }
+}
+
+// Unregister trade
+async function unregisterTrade(ticker) {
+    try {
+        const response = await fetch(`/api/realtime-signals/trade/${encodeURIComponent(ticker)}`, {
+            method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            showNotification(`Trade unregistered for ${ticker}`, 'success');
+            return true;
+        } else {
+            showNotification(data.error || 'Failed to unregister trade', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error unregistering trade:', error);
+        showNotification('Error unregistering trade', 'error');
+        return false;
+    }
+}
+
+// Get real-time signal for a ticker
+async function getRealtimeSignal(ticker) {
+    try {
+        const response = await fetch(`/api/realtime-signals/${encodeURIComponent(ticker)}`);
+        if (response.ok) {
+            return await response.json();
+        }
+        return null;
+    } catch (error) {
+        console.error('Error getting real-time signal:', error);
+        return null;
+    }
+}
+
+// Initialize real-time signal updates
+function initRealtimeSignals() {
+    // Listen for signal updates via Socket.IO
+    if (window.wsClient && window.wsClient.socket) {
+        window.wsClient.socket.on('signal_update', (data) => {
+            if (data && data.ticker && data.signal) {
+                updateSignalCard(data.ticker, data.signal);
+                console.log(`[RealtimeSignal] Updated signal for ${data.ticker}:`, data.signal.signal);
+            }
+        });
+    }
+    
+    // Also listen for price updates and trigger signal refresh if needed
+    window.addEventListener('priceUpdate', (event) => {
+        const ticker = event.detail.ticker;
+        if (ticker) {
+            // Signal will be updated automatically by backend when price changes significantly
+            // Just log for debugging
+            console.debug(`[RealtimeSignal] Price update received for ${ticker}`);
+        }
+    });
+}
+
+// Call initialization when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initRealtimeSignals);
+} else {
+    initRealtimeSignals();
 }
 
 // Include all functions from dashboard.js

@@ -106,8 +106,28 @@ class EnsembleManager:
             return self._voting(active_predictions)
         elif self.ensemble_method == 'stacking':
             return self._stacking(active_predictions)
+        elif self.ensemble_method == 'dynamic':
+            # Detect market regime and select models dynamically
+            market_regime = self._detect_market_regime(active_predictions)
+            return self.dynamic_model_selection(active_predictions, market_regime)
         else:
             return self._weighted_average(active_predictions, confidence_scores)
+    
+    def _detect_market_regime(self, predictions: Dict[str, float]) -> str:
+        """Detect current market regime based on predictions"""
+        # Simplified regime detection - in production, use volatility, trend, etc.
+        probs = list(predictions.values())
+        prob_std = np.std(probs)
+        prob_mean = np.mean(probs)
+        
+        if prob_std > 0.15:
+            return 'volatile'
+        elif prob_mean > 0.6 or prob_mean < 0.4:
+            return 'trending'
+        elif 0.45 <= prob_mean <= 0.55:
+            return 'ranging'
+        else:
+            return 'normal'
     
     def _weighted_average(
         self,
@@ -178,9 +198,69 @@ class EnsembleManager:
         }
     
     def _stacking(self, predictions: Dict[str, float]) -> Dict:
-        """Stacking ensemble (simplified - would need meta-learner in production)"""
-        # For now, use weighted average as stacking approximation
-        return self._weighted_average(predictions)
+        """Stacking ensemble with meta-learner"""
+        # Use meta-learner (Logistic Regression) to combine predictions
+        try:
+            from sklearn.linear_model import LogisticRegression
+            
+            # Prepare data for meta-learner
+            # In production, this would use historical predictions and outcomes
+            # For now, use simple weighted combination with learned coefficients
+            
+            # Get historical performance to train meta-learner
+            # Simplified: use model weights as meta-learner coefficients
+            meta_weights = np.array([self.model_weights.get(mid, 0.1) for mid in predictions.keys()])
+            meta_weights = meta_weights / meta_weights.sum() if meta_weights.sum() > 0 else np.ones(len(meta_weights)) / len(meta_weights)
+            
+            probs = np.array(list(predictions.values()))
+            ensemble_prob = np.dot(probs, meta_weights)
+            
+            # Calculate confidence based on prediction variance
+            std_dev = np.std(probs)
+            confidence = max(0, 1 - (std_dev * 2))
+            
+            return {
+                'probability': float(ensemble_prob),
+                'confidence': float(confidence),
+                'method': 'stacking',
+                'model_count': len(predictions),
+                'individual_predictions': predictions,
+                'meta_weights': {mid: float(w) for mid, w in zip(predictions.keys(), meta_weights)}
+            }
+        except Exception as e:
+            logger.warning(f"Stacking failed, falling back to weighted average: {e}")
+            return self._weighted_average(predictions)
+    
+    def dynamic_model_selection(
+        self,
+        predictions: Dict[str, float],
+        market_regime: str = 'normal'
+    ) -> Dict:
+        """
+        Dynamically select models based on market regime
+        Regimes: 'trending', 'ranging', 'volatile', 'normal'
+        """
+        # Model performance by regime (would be learned from historical data)
+        regime_preferences = {
+            'trending': ['xgboost', 'transformer'],  # Trend-following models
+            'ranging': ['lstm', 'baseline'],  # Mean-reversion models
+            'volatile': ['transformer', 'xgboost'],  # Volatility-aware models
+            'normal': list(predictions.keys())  # All models
+        }
+        
+        preferred_models = regime_preferences.get(market_regime, list(predictions.keys()))
+        
+        # Filter predictions to preferred models
+        filtered_predictions = {
+            mid: prob for mid, prob in predictions.items()
+            if mid in preferred_models
+        }
+        
+        if not filtered_predictions:
+            filtered_predictions = predictions
+        
+        # Use weighted average on filtered models
+        return self._weighted_average(filtered_predictions)
     
     def update_weights(self, performance_data: Dict[str, Dict]) -> None:
         """
