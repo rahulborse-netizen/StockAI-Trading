@@ -3351,7 +3351,9 @@ def order_ready():
 
 @app.route('/api/upstox/place_order', methods=['POST'])
 def place_order():
-    """Phase 2.5: Place order through Upstox (real trading) or Paper Trading (simulation)"""
+    """Phase 2.5: Place order through Upstox (real trading) or Paper Trading (simulation)
+    Phase 3.2: Supports advanced order types (TWAP/VWAP/Iceberg via execution_strategy parameter)
+    """
     # Phase 2.5: Use trading mode manager
     mode_manager = get_trading_mode_manager()
     paper_mode = mode_manager.is_paper_mode()
@@ -3364,12 +3366,62 @@ def place_order():
     price = data.get('price')  # For LIMIT orders
     product = data.get('product', 'D')  # 'D' for Delivery, 'I' for Intraday
     
+    # Phase 3.2: Advanced order execution strategy
+    execution_strategy = data.get('execution_strategy')  # 'TWAP', 'VWAP', 'ICEBERG', None
+    
     if not ticker or not transaction_type or quantity <= 0:
         return jsonify({'error': 'Invalid order parameters: ticker, transaction_type, and quantity > 0 required'}), 400
     
     # Validate order type and price
     if order_type in ['LIMIT', 'SL'] and not price:
         return jsonify({'error': f'Price required for {order_type} orders'}), 400
+    
+    # Phase 3.2: Route to smart order router if execution strategy specified
+    if execution_strategy in ['TWAP', 'VWAP', 'ICEBERG']:
+        try:
+            client = _get_upstox_client() if not paper_mode else None
+            from src.web.advanced_orders import get_smart_order_router
+            router = get_smart_order_router(upstox_client=client)
+            
+            if execution_strategy == 'TWAP':
+                duration_minutes = data.get('duration_minutes', 30)
+                slices = data.get('slices', 10)
+                result = router.execute_twap_order(
+                    ticker=ticker,
+                    quantity=quantity,
+                    transaction_type=transaction_type,
+                    duration_minutes=duration_minutes,
+                    slices=slices
+                )
+            elif execution_strategy == 'VWAP':
+                duration_minutes = data.get('duration_minutes', 30)
+                volume_percentage = data.get('volume_percentage', 0.1)
+                result = router.execute_vwap_order(
+                    ticker=ticker,
+                    quantity=quantity,
+                    transaction_type=transaction_type,
+                    duration_minutes=duration_minutes,
+                    volume_percentage=volume_percentage
+                )
+            elif execution_strategy == 'ICEBERG':
+                visible_quantity = data.get('visible_quantity', quantity // 5)
+                result = router.execute_iceberg_order(
+                    ticker=ticker,
+                    total_quantity=quantity,
+                    transaction_type=transaction_type,
+                    visible_quantity=visible_quantity
+                )
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'✅ {execution_strategy} ORDER EXECUTED!',
+                'execution_strategy': execution_strategy,
+                'result': result,
+                'paper_trading': paper_mode
+            })
+        except Exception as e:
+            logger.exception(f"Smart order routing failed: {e}")
+            return jsonify({'status': 'error', 'error': f'Smart order routing failed: {str(e)}'}), 500
     
     # Extract symbol from ticker
     symbol = ticker.replace('.NS', '').replace('.BO', '').replace('^', '').strip()
@@ -3486,6 +3538,241 @@ def refresh_stocks_universe():
         })
     except Exception as e:
         logger.exception("Refresh stocks universe failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+# ============================================================================
+# Phase 3.2: Advanced Orders API Endpoints
+# ============================================================================
+
+@app.route('/api/orders/advanced/smart-routing', methods=['POST'])
+def smart_order_routing():
+    """Phase 3.2: Execute order using smart order routing (TWAP/VWAP/Iceberg)"""
+    try:
+        data = request.json
+        ticker = data.get('ticker')
+        quantity = int(data.get('quantity', 0))
+        transaction_type = data.get('transaction_type', 'BUY')
+        strategy = data.get('strategy', 'TWAP')  # TWAP, VWAP, ICEBERG
+        
+        if not ticker or quantity <= 0:
+            return jsonify({'status': 'error', 'error': 'ticker and quantity > 0 required'}), 400
+        
+        client = _get_upstox_client()
+        from src.web.advanced_orders import get_smart_order_router
+        router = get_smart_order_router(upstox_client=client)
+        
+        if strategy == 'TWAP':
+            duration_minutes = data.get('duration_minutes', 30)
+            slices = data.get('slices', 10)
+            result = router.execute_twap_order(
+                ticker=ticker,
+                quantity=quantity,
+                transaction_type=transaction_type,
+                duration_minutes=duration_minutes,
+                slices=slices
+            )
+        elif strategy == 'VWAP':
+            duration_minutes = data.get('duration_minutes', 30)
+            volume_percentage = data.get('volume_percentage', 0.1)
+            result = router.execute_vwap_order(
+                ticker=ticker,
+                quantity=quantity,
+                transaction_type=transaction_type,
+                duration_minutes=duration_minutes,
+                volume_percentage=volume_percentage
+            )
+        elif strategy == 'ICEBERG':
+            visible_quantity = data.get('visible_quantity', quantity // 5)
+            result = router.execute_iceberg_order(
+                ticker=ticker,
+                total_quantity=quantity,
+                transaction_type=transaction_type,
+                visible_quantity=visible_quantity
+            )
+        else:
+            return jsonify({'status': 'error', 'error': f'Unknown strategy: {strategy}'}), 400
+        
+        return jsonify({
+            'status': 'success',
+            'strategy': strategy,
+            'result': result
+        })
+    except Exception as e:
+        logger.exception("Smart order routing failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/orders/advanced/bracket', methods=['POST'])
+def create_bracket_order():
+    """Phase 3.2: Create bracket order (Entry + Stop Loss + Target)"""
+    try:
+        data = request.json
+        ticker = data.get('ticker')
+        transaction_type = data.get('transaction_type', 'BUY')
+        quantity = int(data.get('quantity', 0))
+        entry_price = float(data.get('entry_price', 0))
+        stop_loss = float(data.get('stop_loss', 0))
+        target_1 = float(data.get('target_1', 0))
+        target_2 = data.get('target_2')
+        
+        if not ticker or quantity <= 0 or entry_price <= 0 or stop_loss <= 0 or target_1 <= 0:
+            return jsonify({'status': 'error', 'error': 'ticker, quantity, entry_price, stop_loss, target_1 required'}), 400
+        
+        client = _get_upstox_client()
+        from src.web.advanced_orders import get_conditional_order_manager
+        manager = get_conditional_order_manager(upstox_client=client)
+        
+        result = manager.create_bracket_order(
+            ticker=ticker,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            target_1=target_1,
+            target_2=target_2
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Bracket order creation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/orders/advanced/trailing-stop', methods=['POST'])
+def create_trailing_stop_order():
+    """Phase 3.2: Create trailing stop order"""
+    try:
+        data = request.json
+        ticker = data.get('ticker')
+        transaction_type = data.get('transaction_type', 'SELL')
+        quantity = int(data.get('quantity', 0))
+        trailing_stop_percent = data.get('trailing_stop_percent')
+        trailing_stop_amount = data.get('trailing_stop_amount')
+        current_price = data.get('current_price')
+        
+        if not ticker or quantity <= 0:
+            return jsonify({'status': 'error', 'error': 'ticker and quantity > 0 required'}), 400
+        
+        if not trailing_stop_percent and not trailing_stop_amount:
+            return jsonify({'status': 'error', 'error': 'Either trailing_stop_percent or trailing_stop_amount required'}), 400
+        
+        client = _get_upstox_client()
+        from src.web.advanced_orders import get_conditional_order_manager
+        manager = get_conditional_order_manager(upstox_client=client)
+        
+        result = manager.create_trailing_stop_order(
+            ticker=ticker,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            trailing_stop_percent=trailing_stop_percent,
+            trailing_stop_amount=trailing_stop_amount,
+            current_price=current_price
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Trailing stop order creation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/orders/advanced/oco', methods=['POST'])
+def create_oco_order():
+    """Phase 3.2: Create OCO (One-Cancels-Other) order"""
+    try:
+        data = request.json
+        ticker = data.get('ticker')
+        orders = data.get('orders', [])
+        
+        if not ticker or len(orders) < 2:
+            return jsonify({'status': 'error', 'error': 'ticker and at least 2 orders required'}), 400
+        
+        client = _get_upstox_client()
+        from src.web.advanced_orders import get_conditional_order_manager
+        manager = get_conditional_order_manager(upstox_client=client)
+        
+        result = manager.create_oco_order(ticker=ticker, orders=orders)
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("OCO order creation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/orders/advanced/time-based', methods=['POST'])
+def create_time_based_order():
+    """Phase 3.2: Create time-based order"""
+    try:
+        data = request.json
+        ticker = data.get('ticker')
+        transaction_type = data.get('transaction_type', 'BUY')
+        quantity = int(data.get('quantity', 0))
+        start_time_str = data.get('start_time')
+        end_time_str = data.get('end_time')
+        order_type = data.get('order_type', 'MARKET')
+        price = data.get('price')
+        
+        if not ticker or quantity <= 0:
+            return jsonify({'status': 'error', 'error': 'ticker and quantity > 0 required'}), 400
+        
+        from datetime import datetime
+        start_time = datetime.fromisoformat(start_time_str) if start_time_str else None
+        end_time = datetime.fromisoformat(end_time_str) if end_time_str else None
+        
+        client = _get_upstox_client()
+        from src.web.advanced_orders import get_conditional_order_manager
+        manager = get_conditional_order_manager(upstox_client=client)
+        
+        result = manager.create_time_based_order(
+            ticker=ticker,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            start_time=start_time,
+            end_time=end_time,
+            order_type=order_type,
+            price=price
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Time-based order creation failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/orders/advanced/conditional', methods=['GET'])
+def get_conditional_orders():
+    """Phase 3.2: Get all conditional orders"""
+    try:
+        status = request.args.get('status')
+        client = _get_upstox_client()
+        from src.web.advanced_orders import get_conditional_order_manager
+        manager = get_conditional_order_manager(upstox_client=client)
+        
+        orders = manager.get_conditional_orders(status=status)
+        
+        return jsonify({
+            'status': 'success',
+            'orders': orders,
+            'count': len(orders)
+        })
+    except Exception as e:
+        logger.exception("Get conditional orders failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/orders/advanced/conditional/<order_id>/cancel', methods=['POST'])
+def cancel_conditional_order(order_id):
+    """Phase 3.2: Cancel conditional order"""
+    try:
+        client = _get_upstox_client()
+        from src.web.advanced_orders import get_conditional_order_manager
+        manager = get_conditional_order_manager(upstox_client=client)
+        
+        result = manager.cancel_conditional_order(order_id)
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Cancel conditional order failed")
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
