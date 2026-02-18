@@ -49,7 +49,7 @@ def _generate_single_signal(ticker: str, generator, app=None):
             ctx.pop()
 
 
-def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: int = 8):
+def _run_precompute(stocks: Optional[List[str]] = None, app=None, max_workers: int = 3):
     """Generate and cache signals for all stocks using parallel processing."""
     global _precompute_done, _precompute_count
     tickers = stocks or DEFAULT_PRECOMPUTE_STOCKS
@@ -133,7 +133,7 @@ def _generate_holding_signal(holding: dict, generator, app=None):
             ctx.pop()
 
 
-def _run_holdings_precompute(holdings: List[dict], app=None, max_workers: int = 6):
+def _run_holdings_precompute(holdings: List[dict], app=None, max_workers: int = 3):
     """Pre-compute signals for demat holdings using parallel processing."""
     if not holdings:
         return
