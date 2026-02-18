@@ -446,6 +446,14 @@ def download_yahoo_ohlcv(
             )
             if _session is not None:
                 kw["session"] = _session
+            
+            # Check if we're currently rate limited before making request
+            if _yahoo_rate_limit_active:
+                wait_time = 30.0
+                logger.warning(f"Rate limit is active, waiting {wait_time}s before request for {ticker}...")
+                time.sleep(wait_time)
+                _yahoo_rate_limit_active = False  # Reset after waiting
+            
             df = yf.download(**kw)
             if df is not None and not df.empty:
                 logger.info(f"Successfully downloaded {len(df)} rows for {ticker}")
@@ -503,7 +511,11 @@ def download_yahoo_ohlcv(
             if is_rate_limit:
                 _rate_limit_detected = True
                 _yahoo_rate_limit_active = True
-                logger.warning(f"Rate limit detected for {ticker} (type: {err_type}). Will use longer backoff (30s+).")
+                logger.warning(f"Rate limit detected for {ticker} (type: {err_type}, module: {err_module}). Will use longer backoff (30s+).")
+            else:
+                # Debug: log exception details when not detected as rate limit
+                if "rate" in err_str or "limit" in err_str or "429" in err_str:
+                    logger.debug(f"Possible rate limit not detected: type={err_type}, str={err_str[:100]}")
             
             if "ssl" in err_str or "certificate" in err_str or "curl" in err_str or "60" in err_str:
                 _ssl_error_detected = True
