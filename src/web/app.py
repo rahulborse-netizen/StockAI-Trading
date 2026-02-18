@@ -4965,7 +4965,14 @@ def _log_startup():
         logger.warning("[Startup] Signal cache path: not available (%s)", e)
     try:
         dsm = get_data_source_manager()
-        logger.info("[Startup] DataSourceManager ready (Yahoo fallback; Upstox when connected)")
+        # Check Upstox connection status
+        upstox_connected = connection_manager.is_connected()
+        if upstox_connected:
+            logger.info("[Startup] ✅ DataSourceManager ready - Upstox CONNECTED (using LIVE data)")
+            logger.info("[Startup] 📊 Live market data, historical data, and WebSocket streaming available from Upstox")
+        else:
+            logger.info("[Startup] DataSourceManager ready - Upstox NOT connected (using Yahoo Finance fallback)")
+            logger.info("[Startup] 💡 Connect Upstox for live data, better reliability, and no rate limits")
     except Exception as e:
         logger.warning("[Startup] DataSourceManager: %s", e)
     try:

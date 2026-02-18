@@ -104,7 +104,9 @@ class DataSourceManager:
         self.sources.sort(key=lambda x: x['priority'])
 
     def _get_upstox_client(self):
-        """Get Upstox client lazily (requires Flask request context for session)."""
+        """Get Upstox client lazily (requires Flask request context for session).
+        Returns None if Upstox is not connected.
+        """
         try:
             from src.web.upstox_connection import connection_manager
             client = connection_manager.get_client()
@@ -160,7 +162,7 @@ class DataSourceManager:
                         if quote:
                             parsed = market_client.parse_quote(quote)
                             if parsed.get('price', 0) > 0:
-                                logger.debug(f"Got quote for {symbol} from Upstox (live)")
+                                logger.info(f"✅ Got LIVE quote for {symbol} from Upstox: ₹{parsed.get('price', 0):.2f}")
                                 parsed['source'] = 'upstox'
                                 parsed['current_price'] = parsed.get('price', 0)  # for API compatibility
                                 return parsed, DataSource.UPSTOX
@@ -268,7 +270,7 @@ class DataSourceManager:
                                 parsed['value'] = parsed.get('price', 0)  # App expects 'value'
                                 parsed['index_name'] = index_name
                                 parsed['source'] = 'upstox'
-                                logger.info(f"Got index data for {index_name} from Upstox (live)")
+                                logger.info(f"✅ Got LIVE index data for {index_name} from Upstox: ₹{parsed.get('ltp', 0):.2f}")
                                 return parsed, DataSource.UPSTOX
                 
                 elif source == DataSource.YAHOO_FINANCE:
@@ -392,7 +394,7 @@ class DataSourceManager:
                                             date_str = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(ts)[:10]
                                             records.append({'date': date_str, 'open': o, 'high': h, 'low': l, 'close': cl, 'volume': int(v)})
                                     if records:
-                                        logger.info(f"Got {len(records)} historical candles for {symbol} (index) from Upstox")
+                                        logger.info(f"✅ Got {len(records)} historical candles for {symbol} (index) from Upstox (LIVE DATA)")
                                         return records, DataSource.UPSTOX, None
                 except Exception as e:
                     logger.debug(f"Upstox index historical failed for {symbol}: {e}")
@@ -434,7 +436,7 @@ class DataSourceManager:
                                     date_str = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(ts)[:10]
                                     records.append({'date': date_str, 'open': o, 'high': h, 'low': l, 'close': cl, 'volume': int(v)})
                             if records:
-                                logger.info(f"Got {len(records)} historical candles for {symbol} from Upstox")
+                                logger.info(f"✅ Got {len(records)} historical candles for {symbol} from Upstox (LIVE DATA)")
                                 return records, DataSource.UPSTOX, None
                     else:
                         err_body = resp.text[:200] if resp.text else ""

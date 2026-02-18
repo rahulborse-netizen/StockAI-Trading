@@ -156,12 +156,13 @@ class EliteSignalGenerator:
             Path("cache").mkdir(parents=True, exist_ok=True)
             cache_path = Path('cache') / f"{ticker.replace('^', '').replace(':', '_').replace('/', '_')}.csv"
             
-            # Try DataSourceManager first (Upstox when connected - no SSL/blocking)
+            # Try DataSourceManager first (Upstox when connected - no SSL/blocking, live data)
             ohlcv = None
             data_hint = None
+            data_source_used = None
             try:
-                from src.web.data_source_manager import get_data_source_manager
-                hist_data, _, data_hint = get_data_source_manager().get_historical_data(
+                from src.web.data_source_manager import get_data_source_manager, DataSource
+                hist_data, source_used, data_hint = get_data_source_manager().get_historical_data(
                     ticker, start_date, end_date, instrument_key_override=instrument_key_override
                 )
                 if hist_data and len(hist_data) >= 30:
@@ -171,7 +172,11 @@ class EliteSignalGenerator:
                     df.columns = [c.lower() for c in df.columns]
                     if all(c in df.columns for c in ['open', 'high', 'low', 'close', 'volume']):
                         ohlcv = OHLCV(df=df)
-                        logger.info(f"[ELITE Signal] Using Upstox historical data for {ticker}")
+                        data_source_used = source_used
+                        if source_used == DataSource.UPSTOX:
+                            logger.info(f"[ELITE Signal] ✅ Using Upstox LIVE data for {ticker} ({len(hist_data)} days)")
+                        else:
+                            logger.info(f"[ELITE Signal] Using {source_used.name} data for {ticker} ({len(hist_data)} days)")
             except Exception as e:
                 logger.debug(f"[ELITE Signal] DataSourceManager failed for {ticker}: {e}")
             
