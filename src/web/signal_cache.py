@@ -1,9 +1,11 @@
 """
 Signal Cache - Store pre-computed trading signals for instant access
 Signals are persisted so they're ready when you start the server next day
+Thread-safe for parallel signal generation
 """
 import json
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -13,6 +15,9 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path("data/signals")
 CACHE_FILE = CACHE_DIR / "signals_cache.json"
 CACHE_MAX_AGE_HOURS = 24  # Consider cache fresh for 24h (e.g. overnight pre-compute)
+
+# Thread lock for cache writes
+_cache_lock = threading.Lock()
 
 
 def _ensure_cache_dir():
@@ -54,25 +59,26 @@ def get_cached_signal(ticker: str, max_age_hours: float = CACHE_MAX_AGE_HOURS) -
 
 
 def set_cached_signal(ticker: str, signal: Dict[str, Any]) -> None:
-    """Store a signal in cache."""
+    """Store a signal in cache (thread-safe)."""
     _ensure_cache_dir()
-    data = {}
-    if CACHE_FILE.exists():
+    with _cache_lock:
+        data = {}
+        if CACHE_FILE.exists():
+            try:
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+        signals = data.setdefault("signals", {})
+        sig_copy = dict(signal)
+        sig_copy["_cached_at"] = datetime.now().isoformat()
+        signals[ticker] = sig_copy
+        data.setdefault("meta", {})["last_updated"] = datetime.now().isoformat()
         try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            pass
-    signals = data.setdefault("signals", {})
-    sig_copy = dict(signal)
-    sig_copy["_cached_at"] = datetime.now().isoformat()
-    signals[ticker] = sig_copy
-    data.setdefault("meta", {})["last_updated"] = datetime.now().isoformat()
-    try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
-    except Exception as e:
-        logger.warning(f"[SignalCache] Failed to write cache: {e}")
+            with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str)
+        except Exception as e:
+            logger.warning(f"[SignalCache] Failed to write cache: {e}")
 
 
 def get_all_cached_signals(max_age_hours: float = CACHE_MAX_AGE_HOURS) -> Dict[str, Dict[str, Any]]:

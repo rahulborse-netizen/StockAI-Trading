@@ -239,14 +239,20 @@ class EliteSignalGenerator:
             labeled_df = add_label_forward_return_up(feat_df, days=1, threshold=0.0)
             ml_df = clean_ml_frame(labeled_df, feature_cols=feature_cols, label_col="label_up")
             
+            # Log data sizes for debugging
+            logger.debug(f"[ELITE Signal] {ticker}: Raw OHLCV={len(ohlcv.df)}, After features={len(feat_df)}, After labels={len(labeled_df)}, After clean={len(ml_df)}")
+            
             MIN_DAYS = 60  # Lowered from 100 for newer listings (demat stocks); UI shows notice when 60-99 days
             if len(ml_df) < MIN_DAYS:
                 days_available = len(ml_df)
                 days_needed = max(0, MIN_DAYS - days_available)
+                logger.warning(
+                    f"[ELITE Signal] {ticker}: Insufficient data - Raw={len(ohlcv.df)}, Features={len(feat_df)}, Clean={len(ml_df)} (need {MIN_DAYS})"
+                )
                 return {
                     'error': 'Insufficient data for ELITE analysis',
                     'ticker': ticker,
-                    'hint': f'Need at least {MIN_DAYS} days of data. Connect Upstox for live demat data.',
+                    'hint': f'Need at least {MIN_DAYS} days of data. Got {days_available} after feature engineering. Connect Upstox for live demat data.',
                     'days_available': days_available,
                     'days_needed': days_needed,
                 }

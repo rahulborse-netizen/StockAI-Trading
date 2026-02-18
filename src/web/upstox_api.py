@@ -226,27 +226,27 @@ class UpstoxAPI:
     
     def get_holdings(self) -> List[Dict]:
         """Get current holdings with timeout - tries multiple endpoints"""
-        # Try multiple possible endpoints
+        # Try multiple possible endpoints (long-term first - short-term often returns 400 Invalid Endpoint)
         endpoints = [
+            "/portfolio/long-term-holdings",
             "/portfolio/short-term-holdings",
-            "/portfolio/long-term-holdings", 
             "/portfolio/holdings",
-            "/portfolio/positions"  # Sometimes holdings are in positions
+            "/portfolio/positions"
         ]
-        
+
         for endpoint in endpoints:
             try:
                 url = f"{self.BASE_URL}{endpoint}"
                 logger.info(f"[UpstoxAPI] Trying endpoint: {url}")
                 logger.info(f"[UpstoxAPI] Access token present: {bool(self.access_token)}")
-                
+
                 response = self.session.get(url, timeout=10)
                 logger.info(f"[UpstoxAPI] Response status: {response.status_code}")
-                
+
                 if response.status_code == 200:
                     data = response.json()
                     logger.info(f"[UpstoxAPI] Raw API response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
-                    logger.info(f"[UpstoxAPI] Raw API response (first 2000 chars): {str(data)[:2000]}")
+                    logger.debug(f"[UpstoxAPI] Raw API response (first 2000 chars): {str(data)[:2000]}")
                     
                     # Try different response formats
                     holdings = []

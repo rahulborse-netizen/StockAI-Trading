@@ -67,10 +67,34 @@ def add_label_next_day_up(df_with_features: pd.DataFrame, threshold: float = 0.0
 
 
 def clean_ml_frame(df: pd.DataFrame, feature_cols: list[str], label_col: str) -> pd.DataFrame:
+    """
+    Clean ML frame: replace inf with nan, fill feature NaN values, drop rows with NaN labels.
+    
+    Only drops rows where the label is NaN (can't train without labels).
+    Feature NaN values are filled with 0 to preserve rows (features naturally have NaN
+    for early rows where indicators haven't computed yet, e.g., SMA_50 needs 50 rows).
+    """
     cols = feature_cols + [label_col, "close"]
     missing = [c for c in cols if c not in df.columns]
     if missing:
         raise ValueError(f"Missing columns in ML frame: {missing}")
-    out = df[cols].replace([np.inf, -np.inf], np.nan).dropna().copy()
+    out = df[cols].copy()
+    
+    # Replace inf with nan
+    out = out.replace([np.inf, -np.inf], np.nan)
+    
+    # Fill feature NaN values with 0 (preserves rows - features naturally have NaN for early rows)
+    for col in feature_cols:
+        if col in out.columns:
+            out[col] = out[col].fillna(0.0)
+    
+    # Ensure close price is not NaN (critical for calculations)
+    if "close" in out.columns:
+        out["close"] = out["close"].ffill().bfill()
+    
+    # Only drop rows where label is NaN (can't train without labels)
+    # The last row(s) will have NaN label due to forward-looking calculation
+    out = out.dropna(subset=[label_col]).copy()
+    
     return out
 

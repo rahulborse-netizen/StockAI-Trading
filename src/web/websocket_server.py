@@ -18,8 +18,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Upstox REST base for authorize endpoint
-UPSTOX_FEED_AUTHORIZE_URL = "https://api.upstox.com/v2/feed/market-data-feed/authorize"
+# Upstox REST base for authorize endpoint (v2 discontinued; use v3)
+UPSTOX_FEED_AUTHORIZE_URL = "https://api.upstox.com/v3/feed/market-data-feed/authorize"
 
 
 class UpstoxWebSocketManager:

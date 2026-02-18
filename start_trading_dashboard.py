@@ -10,11 +10,15 @@ from pathlib import Path
 try:
     import certifi
     _cert_path = certifi.where()
-    os.environ.setdefault("SSL_CERT_FILE", _cert_path)
-    os.environ.setdefault("REQUESTS_CA_BUNDLE", _cert_path)
-    os.environ.setdefault("CURL_CA_BUNDLE", _cert_path)
+    os.environ["SSL_CERT_FILE"] = _cert_path
+    os.environ["REQUESTS_CA_BUNDLE"] = _cert_path
+    os.environ["CURL_CA_BUNDLE"] = _cert_path
 except ImportError:
     pass
+
+# On Windows, Yahoo fallback often fails with "unable to get local issuer certificate". Use insecure SSL by default so the dashboard works; set YFINANCE_INSECURE_SSL=0 to enforce SSL.
+if sys.platform == "win32" and "YFINANCE_INSECURE_SSL" not in os.environ:
+    os.environ["YFINANCE_INSECURE_SSL"] = "1"
 
 # Add project root to path
 project_root = Path(__file__).resolve().parent

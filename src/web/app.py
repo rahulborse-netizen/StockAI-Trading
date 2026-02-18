@@ -896,12 +896,16 @@ def get_all_index_signals():
     except ImportError:
         enhance_index_signal = None
 
-    for index in indices:
+    # Process indices in parallel for faster response
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    def _process_index(index):
+        """Process a single index signal."""
         try:
             from src.web.signal_cache import get_cached_signal
             cached = get_cached_signal(index['ticker'])
             if cached:
-                signal_response = cached
+                return index, cached, None
             else:
                 signal_response = elite_generator.generate_signal(
                     ticker=index['ticker'],
@@ -909,6 +913,30 @@ def get_all_index_signals():
                     use_multi_timeframe=False,
                     instrument_key_override=None
                 )
+                return index, signal_response, None
+        except Exception as e:
+            return index, None, e
+    
+    # Process all indices in parallel
+    index_results = {}
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_index = {
+            executor.submit(_process_index, idx): idx
+            for idx in indices
+        }
+        
+        for future in as_completed(future_to_index):
+            idx, signal_response, error = future.result()
+            index_results[idx['ticker']] = (idx, signal_response, error)
+    
+    # Process results in original order
+    for index in indices:
+        idx, signal_response, error = index_results.get(index['ticker'], (index, None, None))
+        try:
+            if error:
+                raise error
+            if signal_response is None:
+                signal_response = {'error': 'Failed to generate signal'}
             if 'error' in signal_response:
                 error_msg = signal_response.get('error') or 'Data not available'
                 hint = signal_response.get('hint') or 'Try again later or connect Upstox for live data.'
@@ -4329,40 +4357,45 @@ def get_all_stocks_signals():
         
         # Get ELITE signal generator
         elite_generator = get_elite_signal_generator()
+        from src.web.signal_cache import get_cached_signal
         
         signals = []
         errors = []
         
-        # Process stocks
-        for ticker in stocks_to_process:
+        def _process_ticker(ticker):
+            """Process a single ticker and return signal data or error."""
             try:
-                # Generate signal using ELITE strategy
-                signal_response = elite_generator.generate_signal(
-                    ticker=ticker,
-                    use_ensemble=True,
-                    use_multi_timeframe=True
-                )
+                # Check cache first
+                cached = get_cached_signal(ticker)
+                if cached:
+                    signal_response = cached
+                else:
+                    # Generate signal using ELITE strategy
+                    signal_response = elite_generator.generate_signal(
+                        ticker=ticker,
+                        use_ensemble=True,
+                        use_multi_timeframe=True
+                    )
                 
                 if 'error' in signal_response:
-                    errors.append({'ticker': ticker, 'error': signal_response.get('error')})
-                    continue
+                    return {'ticker': ticker, 'error': signal_response.get('error')}
                 
                 # Apply filters
                 signal_type = signal_response.get('signal', 'HOLD')
                 confidence = signal_response.get('confidence', 0.0)
                 
                 if signal_filter and signal_type != signal_filter:
-                    continue
+                    return None  # Filtered out
                 
                 if confidence < min_confidence:
-                    continue
+                    return None  # Filtered out
                 
                 # Extract regime info
                 regime_info = signal_response.get('regime_info', {})
                 regime_type = signal_response.get('regime_type', 'UNKNOWN')
                 market_phase = regime_info.get('market_phase', 'NEUTRAL') if isinstance(regime_info, dict) else 'NEUTRAL'
                 
-                signals.append({
+                return {
                     'ticker': ticker,
                     'signal': signal_type,
                     'confidence': round(confidence, 3),
@@ -4377,12 +4410,29 @@ def get_all_stocks_signals():
                     'volatility_pct': round(regime_info.get('volatility_pct', 0), 2) if isinstance(regime_info, dict) else 0,
                     'strategy_used': 'Adaptive Elite',
                     'timestamp': signal_response.get('timestamp', datetime.now().isoformat())
-                })
-                
+                }
             except Exception as e:
                 logger.debug(f"Error getting signal for {ticker}: {e}")
-                errors.append({'ticker': ticker, 'error': str(e)})
-                continue
+                return {'ticker': ticker, 'error': str(e)}
+        
+        # Process stocks in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        max_workers = min(10, len(stocks_to_process))  # Limit concurrent requests
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_ticker = {
+                executor.submit(_process_ticker, ticker): ticker
+                for ticker in stocks_to_process
+            }
+            
+            for future in as_completed(future_to_ticker):
+                result = future.result()
+                if result is None:
+                    continue  # Filtered out
+                if 'error' in result:
+                    errors.append(result)
+                else:
+                    signals.append(result)
         
         # Sort by confidence (highest first), then by signal (BUY > SELL > HOLD)
         signal_priority = {'BUY': 3, 'SELL': 2, 'HOLD': 1}
@@ -4932,7 +4982,16 @@ def _log_startup():
         learn_from_feedback(days=30)
         logger.info("[Startup] Agentic: ensemble weights loaded from feedback")
     except Exception as e:
-        logger.debug("[Startup] Agentic learn_from_feedback: %s", e)
+        logger.debug(f"[Startup] Agentic learn_from_feedback: {e}")
+    
+    # Start background signal pre-computation for faster signal loading
+    try:
+        from src.web.signal_precompute import start_precompute_background
+        # Start precompute in background (non-blocking)
+        start_precompute_background(app=app)
+        logger.info("[Startup] Signal pre-computation started in background")
+    except Exception as e:
+        logger.debug(f"[Startup] Signal precompute startup skipped: {e}")
 
 
 _log_startup()

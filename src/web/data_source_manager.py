@@ -325,7 +325,7 @@ class DataSourceManager:
         Get historical data from best available source
         
         Args:
-            symbol: Stock symbol
+            symbol: Stock symbol or index ticker (e.g., 'RELIANCE.NS', '^NSEI')
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
             instrument_key_override: Optional Upstox instrument_key (e.g. from holdings) - bypasses instrument master lookup
@@ -334,6 +334,69 @@ class DataSourceManager:
             Tuple of (historical_data, source_used, error_hint) or (None, None, hint) if all sources fail
         """
         last_hint: Optional[str] = "Historical data unavailable for this ticker"
+        
+        # For index tickers (^NSEI, ^NSEBANK, etc.), try get_index_data first
+        if symbol.startswith('^') or symbol.upper() in ['NSEI', 'NSEBANK', 'BSESN', 'INDIAVIX']:
+            # Map ticker to index name
+            index_map = {
+                '^NSEI': 'nifty',
+                '^NSEBANK': 'banknifty',
+                '^BSESN': 'sensex',
+                '^INDIAVIX': 'vix',
+                'NSEI': 'nifty',
+                'NSEBANK': 'banknifty',
+                'BSESN': 'sensex',
+                'INDIAVIX': 'vix',
+            }
+            index_name = index_map.get(symbol.upper() if not symbol.startswith('^') else symbol, symbol.lower().replace('^', ''))
+            
+            # Try Upstox index data first
+            upstox_client = self._get_upstox_client()
+            if upstox_client and upstox_client.access_token:
+                try:
+                    index_data, source = self.get_index_data(index_name)
+                    if index_data and index_data.get('ltp', 0) > 0:
+                        # For indices, we need historical data - try Upstox historical API with index instrument key
+                        # Upstox uses specific instrument keys for indices
+                        index_inst_keys = {
+                            'nifty': 'NSE_INDEX|Nifty 50',
+                            'banknifty': 'NSE_INDEX|Nifty Bank',
+                            'sensex': 'BSE_INDEX|SENSEX',
+                            'vix': 'NSE_INDEX|India VIX',
+                        }
+                        inst_key = index_inst_keys.get(index_name.lower())
+                        if inst_key:
+                            from urllib.parse import quote
+                            inst_key_enc = quote(inst_key, safe="")
+                            url = f"https://api.upstox.com/v2/historical-candle/{inst_key_enc}/day/{end_date}/{start_date}"
+                            resp = upstox_client.session.get(url, timeout=30)
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                candles = data.get("data", {}).get("candles") if isinstance(data, dict) else None
+                                if candles and isinstance(candles, list):
+                                    records = []
+                                    for c in candles:
+                                        if isinstance(c, (list, tuple)) and len(c) >= 5:
+                                            ts, o, h, l, cl = c[0], float(c[1]), float(c[2]), float(c[3]), float(c[4])
+                                            v = float(c[5]) if len(c) > 5 else 0
+                                            if isinstance(ts, (int, float)):
+                                                ts_sec = ts / 1000.0 if ts > 1e12 else ts
+                                                dt = datetime.fromtimestamp(ts_sec)
+                                            elif isinstance(ts, str):
+                                                try:
+                                                    dt = datetime.strptime(ts[:10], '%Y-%m-%d')
+                                                except Exception:
+                                                    dt = datetime.now()
+                                            else:
+                                                dt = datetime.now()
+                                            date_str = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(ts)[:10]
+                                            records.append({'date': date_str, 'open': o, 'high': h, 'low': l, 'close': cl, 'volume': int(v)})
+                                    if records:
+                                        logger.info(f"Got {len(records)} historical candles for {symbol} (index) from Upstox")
+                                        return records, DataSource.UPSTOX, None
+                except Exception as e:
+                    logger.debug(f"Upstox index historical failed for {symbol}: {e}")
+        
         # Try Upstox first (when connected) - no SSL/blocking issues
         upstox_client = self._get_upstox_client()
         if upstox_client and upstox_client.access_token:

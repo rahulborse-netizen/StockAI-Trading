@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,17 @@ import numpy as np
 import pandas as pd
 import time
 import logging
+
+# Set SSL certs for yfinance/curl before any HTTP (avoids "unable to get local issuer certificate")
+try:
+    import certifi
+    _ca = certifi.where()
+    # Force set so curl_cffi/libcurl pick up the bundle (setdefault can leave wrong value)
+    os.environ["SSL_CERT_FILE"] = _ca
+    os.environ["REQUESTS_CA_BUNDLE"] = _ca
+    os.environ["CURL_CA_BUNDLE"] = _ca
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -371,13 +383,23 @@ def download_yahoo_ohlcv(
 
     import yfinance as yf
 
-    # Do NOT pass session= to yf.download - yfinance requires curl_cffi, not requests.Session.
-    # Let yfinance use its default. Set SSL env vars (certifi) before import if needed for Windows.
+    # Optional: skip SSL verify for corporate proxies (set YFINANCE_INSECURE_SSL=1)
+    _session = None
+    _ssl_error_detected = False
+    if os.environ.get("YFINANCE_INSECURE_SSL", "").strip() == "1":
+        try:
+            from curl_cffi import requests as ccurl
+            _session = ccurl.Session(impersonate="chrome", verify=False)
+            logger.warning("YFINANCE_INSECURE_SSL=1: SSL verification disabled for yfinance (insecure).")
+        except Exception as e:
+            logger.warning("YFINANCE_INSECURE_SSL=1 but curl_cffi session failed: %s", e)
+
     last_err: Exception | None = None
+    df = None
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"Downloading {ticker} (attempt {attempt}/{retries})...")
-            df = yf.download(
+            kw = dict(
                 tickers=ticker,
                 start=start,
                 end=end,
@@ -387,11 +409,12 @@ def download_yahoo_ohlcv(
                 threads=False,
                 group_by="column",
             )
-            
+            if _session is not None:
+                kw["session"] = _session
+            df = yf.download(**kw)
             if df is not None and not df.empty:
                 logger.info(f"Successfully downloaded {len(df)} rows for {ticker}")
                 break
-            # yfinance can return None; treat as no data
             if df is None:
                 df = pd.DataFrame()
             last_err = ValueError(
@@ -399,12 +422,47 @@ def download_yahoo_ohlcv(
                 f"Date range: {start} to {end}. "
                 "Possible causes: invalid ticker, market holidays, or data source issue."
             )
+        except ValueError as e:
+            # yfinance can raise "No objects to concatenate" when all fetches fail (e.g. SSL)
+            last_err = e
+            df = pd.DataFrame()
+            err_str = str(e).lower()
+            if "ssl" in err_str or "certificate" in err_str or "curl" in err_str:
+                _ssl_error_detected = True
+            if "No objects to concatenate" in str(e):
+                # This usually means yfinance failed (often SSL) - treat as SSL issue for auto-retry
+                _ssl_error_detected = True
+                logger.warning(
+                    "Attempt %s/%s failed for %s: No data (likely SSL or empty response).",
+                    attempt, retries, ticker
+                )
+            else:
+                logger.warning("Attempt %s/%s failed for %s: %s", attempt, retries, ticker, e)
         except Exception as e:  # noqa: BLE001
             last_err = e
-            error_msg = str(e)
+            df = pd.DataFrame()
+            err_str = str(e).lower()
+            if "ssl" in err_str or "certificate" in err_str or "curl" in err_str or "60" in err_str:
+                _ssl_error_detected = True
+                if _session is None and attempt == 1:
+                    logger.warning(
+                        "SSL certificate error detected. Set YFINANCE_INSECURE_SSL=1 to disable SSL verify (insecure)."
+                    )
             logger.warning(
-                f"Attempt {attempt}/{retries} failed for {ticker}: {error_msg}"
+                f"Attempt {attempt}/{retries} failed for {ticker}: {e}"
             )
+        
+        # If SSL error detected and no session yet, create one with verify=False for remaining retries
+        if _ssl_error_detected and _session is None and attempt < retries:
+            try:
+                from curl_cffi import requests as ccurl
+                _session = ccurl.Session(impersonate="chrome", verify=False)
+                logger.warning(
+                    "SSL error detected: Automatically retrying with SSL verify disabled (insecure). "
+                    "Set YFINANCE_INSECURE_SSL=1 to enable this by default."
+                )
+            except Exception:
+                pass  # curl_cffi not available, continue with normal retries
         
         # Exponential backoff: sleep longer on each retry
         if attempt < retries:
@@ -413,6 +471,41 @@ def download_yahoo_ohlcv(
             time.sleep(sleep_time)
     else:
         # All retries exhausted for primary ticker
+        # If SSL error was detected but we haven't tried with verify=False yet, do one more attempt
+        if _ssl_error_detected and _session is None:
+            try:
+                from curl_cffi import requests as ccurl
+                _session = ccurl.Session(impersonate="chrome", verify=False)
+                logger.warning(
+                    "SSL error detected on final attempt: Retrying once more with SSL verify disabled (insecure)."
+                )
+                # Do one final attempt with verify=False
+                try:
+                    logger.info(f"Downloading {ticker} (final SSL-retry attempt)...")
+                    kw = dict(
+                        tickers=ticker,
+                        start=start,
+                        end=end,
+                        interval=interval,
+                        auto_adjust=False,
+                        progress=False,
+                        threads=False,
+                        group_by="column",
+                        session=_session,
+                    )
+                    df = yf.download(**kw)
+                    if df is not None and not df.empty:
+                        df = _standardize_ohlcv(df, ticker)
+                        if df is not None and not df.empty:
+                            if validate:
+                                df = _validate_ohlcv(df, ticker, start, end)
+                            if cache_path and df is not None and not df.empty:
+                                df.to_csv(cache_path)
+                            return OHLCV(df=df)
+                except Exception as final_err:
+                    logger.debug(f"Final SSL-retry attempt failed: {final_err}")
+            except Exception:
+                pass  # curl_cffi not available, continue to error
         # For index tickers (^NSEI etc.), yfinance sometimes raises TypeError internally;
         # try once with ticker without ^ (e.g. NSEI) before giving up.
         if ticker.startswith("^"):
@@ -444,6 +537,8 @@ def download_yahoo_ohlcv(
         error_details.append(f"Ticker: {ticker}")
         error_details.append(f"Date range: {start} to {end}")
         error_details.append(f"Interval: {interval}")
+        if _ssl_error_detected and _session is not None:
+            error_details.append("Note: SSL verification was automatically disabled due to certificate errors.")
         
         raise RuntimeError(
             f"Failed to download Yahoo Finance data for {ticker} after {retries} retries.\n"
@@ -453,7 +548,8 @@ def download_yahoo_ohlcv(
             "  2. Check date range (ensure market was open during this period)\n"
             "  3. If on corporate network/proxy, try:\n"
             "     - `python -m pip install --upgrade certifi`\n"
-            "     - Set SSL_CERT_FILE or REQUESTS_CA_BUNDLE environment variables\n"
+            "     - Set SSL_CERT_FILE / REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE to certifi.where()\n"
+            "     - Or set YFINANCE_INSECURE_SSL=1 to skip SSL verify (insecure, last resort)\n"
             "  4. Check internet connection and firewall settings\n"
             "  5. Try again later (Yahoo Finance may be temporarily unavailable)"
         ) from last_err
