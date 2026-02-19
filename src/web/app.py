@@ -931,6 +931,306 @@ def get_model_rankings():
         logger.error(f"Error getting model rankings: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+# ============================================================================
+# Phase 2.3: MLOps Pipeline API Endpoints
+# ============================================================================
+
+@app.route('/api/mlops/pipeline/status', methods=['GET'])
+def mlops_pipeline_status():
+    """Phase 2.3: Get training pipeline status"""
+    try:
+        from src.web.mlops.pipeline import get_training_pipeline
+        pipeline = get_training_pipeline()
+        return jsonify({'status': 'success', **pipeline.get_status()})
+    except Exception as e:
+        logger.exception("MLOps pipeline status failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/mlops/pipeline/trigger', methods=['POST'])
+def mlops_pipeline_trigger():
+    """Phase 2.3: Trigger model retraining"""
+    try:
+        from src.web.mlops.pipeline import get_training_pipeline
+        data = request.get_json() or {}
+        reason = data.get('reason', 'manual')
+        pipeline = get_training_pipeline()
+        result = pipeline.trigger_retrain(reason=reason)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("MLOps pipeline trigger failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/mlops/ab/experiments', methods=['GET'])
+def mlops_ab_experiments():
+    """Phase 2.3: List A/B experiments"""
+    try:
+        from src.web.mlops.ab_testing import get_ab_test_manager
+        manager = get_ab_test_manager()
+        return jsonify({'experiments': manager.list_experiments()})
+    except Exception as e:
+        logger.exception("MLOps A/B experiments list failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/mlops/ab/experiments', methods=['POST'])
+def mlops_ab_create():
+    """Phase 2.3: Create A/B experiment"""
+    try:
+        from src.web.mlops.ab_testing import get_ab_test_manager
+        data = request.get_json() or {}
+        exp_id = data.get('experiment_id') or f"exp_{int(__import__('time').time())}"
+        manager = get_ab_test_manager()
+        result = manager.create_experiment(
+            experiment_id=exp_id,
+            control_model_id=data.get('control_model_id', 'control'),
+            variant_model_id=data.get('variant_model_id', 'variant'),
+            traffic_split=float(data.get('traffic_split', 0.5)),
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("MLOps A/B create failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/mlops/ab/experiments/<exp_id>/results', methods=['GET'])
+def mlops_ab_results(exp_id):
+    """Phase 2.3: Get A/B experiment results"""
+    try:
+        from src.web.mlops.ab_testing import get_ab_test_manager
+        manager = get_ab_test_manager()
+        result = manager.get_experiment_results(exp_id)
+        if result is None:
+            return jsonify({'error': 'Experiment not found'}), 404
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("MLOps A/B results failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/mlops/monitoring/dashboard', methods=['GET'])
+def mlops_monitoring_dashboard():
+    """Phase 2.3: Get ML monitoring dashboard metrics"""
+    try:
+        from src.web.mlops.monitoring import get_ml_monitor
+        monitor = get_ml_monitor()
+        return jsonify(monitor.get_dashboard_metrics())
+    except Exception as e:
+        logger.exception("MLOps monitoring dashboard failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/mlops/monitoring/alerts', methods=['GET'])
+def mlops_monitoring_alerts():
+    """Phase 2.3: Get recent ML alerts"""
+    try:
+        from src.web.mlops.monitoring import get_ml_monitor
+        limit = int(request.args.get('limit', 50))
+        monitor = get_ml_monitor()
+        return jsonify({'alerts': monitor.get_recent_alerts(limit=limit)})
+    except Exception as e:
+        logger.exception("MLOps monitoring alerts failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/mlops/explain/signal', methods=['POST'])
+def mlops_explain_signal():
+    """Phase 2.3: Get signal reasoning / explainability"""
+    try:
+        from src.web.mlops.explainability import get_explainability_manager
+        data = request.get_json() or {}
+        manager = get_explainability_manager()
+        result = manager.get_signal_reasoning(
+            ticker=data.get('ticker', ''),
+            signal=data.get('signal', 'HOLD'),
+            feature_contributions=data.get('feature_contributions'),
+            top_n=int(data.get('top_n', 5)),
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("MLOps explain signal failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+# ============================================================================
+# Phase 5.1: Advanced Analytics API
+# ============================================================================
+
+@app.route('/api/analytics/advanced/metrics', methods=['POST'])
+def analytics_advanced_metrics():
+    """Phase 5.1: Sortino, Calmar, MAE/MFE, trade analytics"""
+    try:
+        from src.web.advanced_analytics import (
+            sortino_ratio,
+            calmar_ratio,
+            compute_trade_analytics,
+        )
+        data = request.get_json() or {}
+        returns = data.get('returns')
+        trades = data.get('trades', [])
+        risk_free = float(data.get('risk_free_rate', 0.0))
+        if returns:
+            returns = np.array(returns)
+            sortino = sortino_ratio(returns, risk_free_rate=risk_free)
+            calmar = calmar_ratio(returns)
+        else:
+            sortino = calmar = None
+        trade_stats = compute_trade_analytics(trades) if trades else {}
+        return jsonify({
+            'sortino_ratio': sortino,
+            'calmar_ratio': calmar,
+            'trade_analytics': trade_stats,
+        })
+    except Exception as e:
+        logger.exception("Advanced analytics failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/analytics/attribution', methods=['POST'])
+def analytics_attribution():
+    """Phase 5.1: Attribution by model and by period"""
+    try:
+        from src.web.advanced_analytics import attribution_by_model, attribution_by_period
+        data = request.get_json() or {}
+        records = data.get('records', [])
+        period = data.get('period', 'day')
+        by_model = attribution_by_model(records)
+        by_time = attribution_by_period(records, period=period)
+        return jsonify({
+            'by_model': by_model,
+            'by_period': by_time,
+        })
+    except Exception as e:
+        logger.exception("Attribution failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+# ============================================================================
+# Phase 5.2: Backtesting Infrastructure API
+# ============================================================================
+
+@app.route('/api/backtest/walk-forward', methods=['POST'])
+def backtest_walk_forward():
+    """Phase 5.2: Walk-forward analysis"""
+    try:
+        from src.web.backtesting_infra import walk_forward_analysis
+        data = request.get_json() or {}
+        returns = data.get('returns', [])
+        returns = np.array(returns)
+        train_ratio = float(data.get('train_ratio', 0.7))
+        result = walk_forward_analysis(returns, train_ratio=train_ratio)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Walk-forward failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/backtest/monte-carlo', methods=['POST'])
+def backtest_monte_carlo():
+    """Phase 5.2: Monte Carlo simulation"""
+    try:
+        from src.web.backtesting_infra import monte_carlo_simulation
+        data = request.get_json() or {}
+        returns = data.get('returns', [])
+        returns = np.array(returns)
+        n_sim = int(data.get('n_simulations', 1000))
+        horizon = int(data.get('horizon_days', 252))
+        result = monte_carlo_simulation(returns, n_simulations=n_sim, horizon_days=horizon)
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Monte Carlo failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/backtest/strategy-comparison', methods=['POST'])
+def backtest_strategy_comparison():
+    """Phase 5.2: Compare multiple strategies"""
+    try:
+        from src.web.backtesting_infra import strategy_comparison
+        data = request.get_json() or {}
+        strategies = data.get('strategies', {})  # name -> list of returns
+        strategies = {k: np.array(v) for k, v in strategies.items()}
+        result = strategy_comparison(strategies)
+        return jsonify({'comparison': result})
+    except Exception as e:
+        logger.exception("Strategy comparison failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+# ============================================================================
+# Phase 6: Enterprise API (Audit, RBAC)
+# ============================================================================
+
+@app.route('/api/enterprise/audit/log', methods=['POST'])
+def enterprise_audit_log():
+    """Phase 6: Write audit log entry"""
+    try:
+        from src.web.enterprise import get_audit_log
+        data = request.get_json() or {}
+        get_audit_log().log(
+            action=data.get('action', ''),
+            user_id=data.get('user_id'),
+            resource=data.get('resource'),
+            details=data.get('details'),
+            ip=request.remote_addr,
+        )
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logger.exception("Audit log failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/enterprise/audit/query', methods=['GET'])
+def enterprise_audit_query():
+    """Phase 6: Query audit log"""
+    try:
+        from src.web.enterprise import get_audit_log
+        user_id = request.args.get('user_id')
+        action = request.args.get('action')
+        limit = int(request.args.get('limit', 100))
+        entries = get_audit_log().query(user_id=user_id, action=action, limit=limit)
+        return jsonify({'entries': entries})
+    except Exception as e:
+        logger.exception("Audit query failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/enterprise/rbac/assign', methods=['POST'])
+def enterprise_rbac_assign():
+    """Phase 6: Assign role to user"""
+    try:
+        from src.web.enterprise import get_rbac
+        data = request.get_json() or {}
+        user_id = data.get('user_id')
+        role = data.get('role')
+        if not user_id or not role:
+            return jsonify({'error': 'user_id and role required'}), 400
+        rbac = get_rbac()
+        if rbac.assign_role(user_id, role):
+            return jsonify({'status': 'success', 'user_id': user_id, 'role': role})
+        return jsonify({'error': 'Invalid role'}), 400
+    except Exception as e:
+        logger.exception("RBAC assign failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/enterprise/rbac/check', methods=['GET'])
+def enterprise_rbac_check():
+    """Phase 6: Check permission"""
+    try:
+        from src.web.enterprise import get_rbac
+        user_id = request.args.get('user_id', '')
+        permission = request.args.get('permission', '')
+        rbac = get_rbac()
+        allowed = rbac.has_permission(user_id, permission)
+        return jsonify({'user_id': user_id, 'permission': permission, 'allowed': allowed, 'role': rbac.get_role(user_id)})
+    except Exception as e:
+        logger.exception("RBAC check failed")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
 @app.route('/api/realtime-signals/<path:ticker>', methods=['GET'])
 def get_realtime_signal(ticker):
     """
